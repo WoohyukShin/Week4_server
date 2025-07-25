@@ -26,6 +26,8 @@ class EventHandler:
             self._landing_crash(target, duration, current_time)
         elif etype == "RUNWAY_INVERT":
             self._invert_runway()
+        elif etype == "LANDING_ANNOUNCE": # 백에서 flight 보고 랜덤으로 생성한 landing event
+            self._landing_announce(target, duration, current_time)
 
     def _emergency_landing(self, flight_id, duration, current_time):
         self.sim.debug(f"EMERGENCY_LANDING: {flight_id} {duration}분 내 착륙 필요")
@@ -92,3 +94,12 @@ class EventHandler:
             self.sim.takeoff_runway = "14L"
             self.sim.landing_runway = "14R"
         self.sim._update_runway_roles_on_closure()
+
+    def _landing_announce(self, flight_id, duration, current_time):
+        self.sim.debug(f"LANDING_ANNOUNCE: {flight_id} {duration}분 뒤 랜딩 예정")
+        # landing schedule을 queue에 추가
+        flight = next((f for f in self.sim.landing_flights if f.flight_id == flight_id), None)
+        if flight:
+            landing_schedule = Schedule(flight, is_takeoff=False, priority=0)
+            landing_schedule.status = FlightStatus.WAITING
+            self.sim.schedules.append(landing_schedule)

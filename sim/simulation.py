@@ -8,6 +8,7 @@ from utils.time_utils import int_to_hhmm
 from sim.flight import FlightStatus
 from sim.schedule import Schedule
 from sim.event_handler import EventHandler
+import random
 
 class SimulationMode(Enum):
     INTERACTIVE = "interactive"   # WebSocket 연결, 시각화/수동 이벤트
@@ -18,11 +19,11 @@ DEFAULT_TAKEOFF_RUNWAY = "14L"
 DEFAULT_LANDING_RUNWAY = "14R"
 
 class Simulation:
-    def __init__(self, airport, flights, events=None, ws=None, mode=None,
-                 takeoff_runway=DEFAULT_TAKEOFF_RUNWAY, landing_runway=DEFAULT_LANDING_RUNWAY):
+    def __init__(self, airport, schedules, landing_flights, events=None, ws=None, mode=None,
+                 takeoff_runway="14L", landing_runway="14R"):
         self.airport = airport
-        self.flights = flights
-        self.schedules = []
+        self.schedules = schedules  # 이륙 스케줄만 가지고 시작
+        self.landing_flights = landing_flights  # 착륙 flight 리스트
         self.completed_schedules = []
         self.events = events if events else []
         self.ws = ws
@@ -36,6 +37,7 @@ class Simulation:
         self.landing_runway = landing_runway
         self.event_handler = EventHandler(self)
         self.initialize_schedules()
+        self._init_landing_announce_events()
 
     def debug(self, msg):
         print(f"[DEBUG] Simulation : {msg}")
@@ -248,3 +250,16 @@ class Simulation:
         e.duration = event.get('duration', 0)
         e.time = self.time
         self.event_queue.append(e)
+
+    def _init_landing_announce_events(self):
+        for flight in self.landing_flights:
+            noise = int(random.gauss(0, 10))  # 표준편차 10분
+            announce_time = max(0, (flight.eta or 0) + noise)
+            self.event_queue.append(
+                type('Event', (), {
+                    'event_type': 'LANDING_ANNOUNCE',
+                    'target': flight.flight_id,
+                    'duration': 20,
+                    'time': announce_time
+                })()
+            )

@@ -17,11 +17,11 @@ def create_rkss_airport():
 
 def main():
     scenario_path = "scenario/sample_scenario.json"
-    flights, events = load_scenario(scenario_path)
+    schedules, landing_flights, events = load_scenario(scenario_path)
     airport = create_rkss_airport()
 
     # 시작/종료 시간 계산
-    min_etd = min(f.etd for f in flights)
+    min_etd = min([s.flight.etd for s in schedules]) if schedules else 0
     start_time = min_etd - 20
     end_time = None  # 시뮬레이션에서 자동 결정
 
@@ -35,7 +35,7 @@ def main():
     else:
         mode = SimulationMode.HEADLESS
 
-    sim = Simulation(airport, flights, events=events, mode=mode)
+    sim = Simulation(airport, schedules, landing_flights, events=events, mode=mode)
 
     if mode == SimulationMode.INTERACTIVE:
         ws_server = WebSocketServer(sim)

@@ -1,0 +1,21 @@
+{
+  "flights": [
+    {
+      "flight_id": "KAL123",
+      "etd": 1300,
+      "eta": 1500,
+      "dep_airport": "GMP",
+      "arr_airport": "AAA",
+      "airline": "Korean Air"
+    },
+    {
+      "flight_id": "AAR456",
+      "etd": 1330,
+      "eta": 1530,
+      "dep_airport": "GMP",
+      "arr_airport": "BBB",
+      "airline": "Asiana"
+    }
+  ],
+  "events": []
+} 

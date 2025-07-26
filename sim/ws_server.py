@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 from utils.logger import debug
+import functools
 
 class WebSocketServer:
     def __init__(self, simulation, host="0.0.0.0", port=8765):
@@ -42,10 +43,14 @@ class WebSocketServer:
         debug(f"WebSocket 서버 시작: ws://{self.host}:{self.port}")
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        
+
         async def run_server():
-            start_server = websockets.serve(self.handler, self.host, self.port)
-            await start_server
-            await asyncio.Future()  # 무한 대기
-        
-        self.loop.run_until_complete(run_server()) 
+            server = await websockets.serve(
+                self.handler,  # just directly
+                self.host,
+                self.port
+            )
+            debug("WebSocket server started")
+            await asyncio.Future()  # run forever
+
+        self.loop.run_until_complete(run_server())

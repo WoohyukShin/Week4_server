@@ -57,10 +57,11 @@ class Simulation:
         end_time_actual = None
         while self.running:
             self.update_status()
+            # Send state update every 10 timesteps (10 sim minutes) to match frontend rate
             self.send_state_update()
             self.handle_events()
             if self.mode == SimulationMode.INTERACTIVE:
-                time.sleep(1)
+                time.sleep(24)
             self.time += 1
             # 완료된 뒤 3 timestep이 지난 스케줄은 schedules에서 제거하고 completed_schedules로 이동
             to_remove = []
@@ -291,7 +292,7 @@ class Simulation:
             self.ws.send(state)
 
     def get_state(self):
-        time = int_to_hhmm(self.time)
+        time = int_to_hhmm_colon(self.time)  # Returns "HH:MM" string format
         def status_to_str(s):
             return s.value
         flights = [self.schedule_to_flight_dict(s, status_to_str) for s in self.schedules]

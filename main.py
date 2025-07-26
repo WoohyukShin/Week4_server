@@ -11,8 +11,9 @@ TAKEOFF_RUNWAY = "14L"
 LANDING_RUNWAY = "14R"
 
 def create_rkss_airport():
-    runways = [Runway("14L"), Runway("14R")]
-    taxiways = [Taxiway("G2"), Taxiway("B")]
+    # 14L(32R) = 안쪽 활주로, 14R(32L) = 바깥쪽 활주로
+    runways = [Runway("14L", "32R"), Runway("14R", "32L")]
+    taxiways = [Taxiway("G2", "B2"), Taxiway("B", "G")]  # G2 <-> B2, B <-> G
     return Airport("RKSS", "GMP", runways, taxiways)
 
 def main():
@@ -25,7 +26,7 @@ def main():
     start_time = min_etd - 20
     end_time = None  # 시뮬레이션에서 자동 결정
 
-    use_ws = True  # 시각화/수동 이벤트용
+    use_ws = False  # WebSocket 서버 비활성화
     is_training = False  # 강화학습 반복용
 
     if is_training:

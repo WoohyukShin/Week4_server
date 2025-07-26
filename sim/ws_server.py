@@ -42,6 +42,10 @@ class WebSocketServer:
         debug(f"WebSocket 서버 시작: ws://{self.host}:{self.port}")
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        start_server = websockets.serve(self.handler, self.host, self.port)
-        self.loop.run_until_complete(start_server)
-        self.loop.run_forever() 
+        
+        async def run_server():
+            start_server = websockets.serve(self.handler, self.host, self.port)
+            await start_server
+            await asyncio.Future()  # 무한 대기
+        
+        self.loop.run_until_complete(run_server()) 

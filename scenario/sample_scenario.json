@@ -1,21 +1,45 @@
 {
   "flights": [
     {
-      "flight_id": "KAL123",
-      "etd": 1300,
-      "eta": 1500,
+      "flight_id": "KAL001",
+      "etd": "0600",
+      "eta": null,
       "dep_airport": "GMP",
-      "arr_airport": "AAA",
+      "arr_airport": "ICN",
       "airline": "Korean Air"
     },
     {
-      "flight_id": "AAR456",
-      "etd": 1330,
-      "eta": 1530,
+      "flight_id": "KAL002",
+      "etd": "0600",
+      "eta": null,
       "dep_airport": "GMP",
-      "arr_airport": "BBB",
-      "airline": "Asiana"
+      "arr_airport": "ICN",
+      "airline": "Korean Air"
+    },
+    {
+      "flight_id": "KAL003",
+      "etd": null,
+      "eta": "0615",
+      "dep_airport": "ICN",
+      "arr_airport": "GMP",
+      "airline": "Korean Air"
+    },
+    {
+      "flight_id": "KAL004",
+      "etd": null,
+      "eta": "0615",
+      "dep_airport": "ICN",
+      "arr_airport": "GMP",
+      "airline": "Korean Air"
     }
   ],
-  "events": []
+  "events": [
+    {
+      "event_type": "RUNWAY_CLOSURE",
+      "target_type": "Runway",
+      "target": "14L",
+      "time": "0610",
+      "duration": 20
+    }
+  ]
 } 

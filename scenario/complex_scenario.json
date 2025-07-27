@@ -1,0 +1,111 @@
+{
+  "flights": [
+    {
+      "flight_id": "KAL001",
+      "etd": "0600",
+      "eta": null,
+      "dep_airport": "GMP",
+      "arr_airport": "ICN",
+      "airline": "Korean Air",
+      "takeoff_crash_prob": 0.002,
+      "landing_crash_prob": 0.001,
+      "emergency_prob": 0.003,
+      "delay_prob": 0.05
+    },
+    {
+      "flight_id": "KAL002",
+      "etd": "0615",
+      "eta": null,
+      "dep_airport": "GMP",
+      "arr_airport": "ICN",
+      "airline": "Korean Air",
+      "takeoff_crash_prob": 0.001,
+      "landing_crash_prob": 0.002,
+      "emergency_prob": 0.004,
+      "delay_prob": 0.08
+    },
+    {
+      "flight_id": "KAL003",
+      "etd": "0630",
+      "eta": null,
+      "dep_airport": "GMP",
+      "arr_airport": "ICN",
+      "airline": "Korean Air",
+      "takeoff_crash_prob": 0.003,
+      "landing_crash_prob": 0.001,
+      "emergency_prob": 0.006,
+      "delay_prob": 0.12
+    },
+    {
+      "flight_id": "KAL004",
+      "etd": null,
+      "eta": "0615",
+      "dep_airport": "ICN",
+      "arr_airport": "GMP",
+      "airline": "Korean Air",
+      "takeoff_crash_prob": 0.001,
+      "landing_crash_prob": 0.003,
+      "emergency_prob": 0.005,
+      "delay_prob": 0.06
+    },
+    {
+      "flight_id": "KAL005",
+      "etd": null,
+      "eta": "0630",
+      "dep_airport": "ICN",
+      "arr_airport": "GMP",
+      "airline": "Korean Air",
+      "takeoff_crash_prob": 0.002,
+      "landing_crash_prob": 0.004,
+      "emergency_prob": 0.007,
+      "delay_prob": 0.10
+    },
+    {
+      "flight_id": "ASA001",
+      "etd": "0645",
+      "eta": null,
+      "dep_airport": "GMP",
+      "arr_airport": "ICN",
+      "airline": "Asiana",
+      "takeoff_crash_prob": 0.004,
+      "landing_crash_prob": 0.002,
+      "emergency_prob": 0.008,
+      "delay_prob": 0.15
+    },
+    {
+      "flight_id": "ASA002",
+      "etd": null,
+      "eta": "0645",
+      "dep_airport": "ICN",
+      "arr_airport": "GMP",
+      "airline": "Asiana",
+      "takeoff_crash_prob": 0.001,
+      "landing_crash_prob": 0.005,
+      "emergency_prob": 0.009,
+      "delay_prob": 0.11
+    }
+  ],
+  "events": [
+    {
+      "event_type": "RUNWAY_CLOSURE",
+      "target_type": "Runway",
+      "target": "14L",
+      "time": "0610",
+      "duration": 20
+    },
+    {
+      "event_type": "FLIGHT_DELAY",
+      "target_type": "Flight",
+      "target": "KAL002",
+      "time": "0612",
+      "duration": 30
+    },
+    {
+      "event_type": "RUNWAY_INVERT",
+      "target_type": "Runway",
+      "target": "",
+      "time": "0650",
+      "duration": 0
+    }
+  ]
+} 

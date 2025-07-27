@@ -23,10 +23,10 @@ def main():
 
     # 시작/종료 시간 계산
     min_etd = min([s.flight.etd for s in schedules]) if schedules else 0
-    start_time = min_etd - 20
+    start_time = min_etd - 3
     end_time = None  # 시뮬레이션에서 자동 결정
 
-    use_ws = False  # WebSocket 서버 비활성화
+    use_ws = True  # WebSocket 서버 비활성화
     is_training = False  # 강화학습 반복용
 
     if is_training:
@@ -39,6 +39,7 @@ def main():
     sim = Simulation(airport, schedules, landing_flights, events=events, mode=mode)
 
     if mode == SimulationMode.INTERACTIVE:
+        from sim.ws_server import WebSocketServer
         ws_server = WebSocketServer(sim)
         ws_thread = threading.Thread(target=ws_server.start, daemon=True)
         ws_thread.start()

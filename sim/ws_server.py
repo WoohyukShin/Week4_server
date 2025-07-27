@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 from utils.logger import debug
+import functools
 
 class WebSocketServer:
     def __init__(self, simulation, host="0.0.0.0", port=8765):
@@ -22,6 +23,17 @@ class WebSocketServer:
                 if data.get("type") == "event":
                     # 프론트에서 event 발생 시
                     self.simulation.on_event(data["event"])
+                elif data.get("type") == "speed_control":
+                    # 프론트에서 속도 변경 요청
+                    speed = data.get("speed", 1)
+                    success = self.simulation.set_speed(speed)
+                    # Send confirmation back to frontend
+                    response = {
+                        "type": "speed_control_response",
+                        "success": success,
+                        "speed": speed if success else self.simulation.speed
+                    }
+                    await websocket.send(json.dumps(response))
         except websockets.ConnectionClosed:
             debug("클라이언트 연결 종료")
         finally:
@@ -42,10 +54,14 @@ class WebSocketServer:
         debug(f"WebSocket 서버 시작: ws://{self.host}:{self.port}")
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        
+
         async def run_server():
-            start_server = websockets.serve(self.handler, self.host, self.port)
-            await start_server
-            await asyncio.Future()  # 무한 대기
-        
-        self.loop.run_until_complete(run_server()) 
+            server = await websockets.serve(
+                self.handler,  # just directly
+                self.host,
+                self.port
+            )
+            debug("WebSocket server started")
+            await asyncio.Future()  # run forever
+
+        self.loop.run_until_complete(run_server())

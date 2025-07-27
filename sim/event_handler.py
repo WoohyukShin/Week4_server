@@ -82,11 +82,25 @@ class EventHandler:
 
     def _takeoff_crash(self, flight_id, duration, current_time):
         debug(f"TAKEOFF_CRASH: {flight_id} 이륙 중 사고, {duration}분간 이륙 활주로 폐쇄")
-        self._close_runway(self.sim.takeoff_runway, duration, current_time)
+        # 이륙 활주로 찾기 (14L 또는 14R)
+        takeoff_runway = None
+        for runway in self.sim.airport.runways:
+            if runway.name in ["14L", "14R"]:
+                takeoff_runway = runway.name
+                break
+        if takeoff_runway:
+            self._close_runway(takeoff_runway, duration, current_time)
 
     def _landing_crash(self, flight_id, duration, current_time):
         debug(f"LANDING_CRASH: {flight_id} 착륙 중 사고, {duration}분간 착륙 활주로 폐쇄")
-        self._close_runway(self.sim.landing_runway, duration, current_time)
+        # 착륙 활주로 찾기 (32L 또는 32R)
+        landing_runway = None
+        for runway in self.sim.airport.runways:
+            if runway.name in ["32L", "32R"]:
+                landing_runway = runway.name
+                break
+        if landing_runway:
+            self._close_runway(landing_runway, duration, current_time)
 
     def _invert_runway(self):
         debug("RUNWAY_INVERT: 모든 활주로 방향 전환")

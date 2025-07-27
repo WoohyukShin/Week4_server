@@ -26,7 +26,7 @@ def main():
     start_time = min_etd - 15
     end_time = None  # 시뮬레이션에서 자동 결정
 
-    use_ws = True  # WebSocket 서버 비활성화
+    use_ws = False  # WebSocket 서버 비활성화
     is_training = False  # 강화학습 반복용
 
     if is_training:

@@ -24,18 +24,17 @@ class Schedule:
         self.runway = None  # 계획된 활주로
         self.deadline = deadline  # 필요시만 사용 
         
-        # Priority 할당 로직
+        # Priority 할당 로직 (Flight에서 가져오거나 직접 설정)
         if priority is not None:
             self.priority = priority
+        elif flight.priority is not None:
+            self.priority = flight.priority
         else:
-            self.priority = self._assign_priority()
-    
-    def _assign_priority(self):
-        """비행 타입에 따라 priority를 랜덤으로 할당"""
-        if self.is_takeoff:
-            return random.randint(PRI_TAKEOFF_MIN, PRI_TAKEOFF_MAX)
-        else:
-            return random.randint(PRI_LANDING_MIN, PRI_LANDING_MAX)
+            # 기본값 설정
+            if self.is_takeoff:
+                self.priority = PRI_TAKEOFF_MIN
+            else:
+                self.priority = PRI_LANDING_MIN
     
     def get_normalized_priority(self):
         """Priority를 0-1 범위로 정규화"""

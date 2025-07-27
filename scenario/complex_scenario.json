@@ -7,10 +7,7 @@
       "dep_airport": "GMP",
       "arr_airport": "ICN",
       "airline": "Korean Air",
-      "takeoff_crash_prob": 0.002,
-      "landing_crash_prob": 0.001,
-      "emergency_prob": 0.003,
-      "delay_prob": 0.05
+      "priority": 15
     },
     {
       "flight_id": "KAL002",
@@ -19,10 +16,7 @@
       "dep_airport": "GMP",
       "arr_airport": "ICN",
       "airline": "Korean Air",
-      "takeoff_crash_prob": 0.001,
-      "landing_crash_prob": 0.002,
-      "emergency_prob": 0.004,
-      "delay_prob": 0.08
+      "priority": 42
     },
     {
       "flight_id": "KAL003",
@@ -31,10 +25,7 @@
       "dep_airport": "GMP",
       "arr_airport": "ICN",
       "airline": "Korean Air",
-      "takeoff_crash_prob": 0.003,
-      "landing_crash_prob": 0.001,
-      "emergency_prob": 0.006,
-      "delay_prob": 0.12
+      "priority": 8
     },
     {
       "flight_id": "KAL004",
@@ -43,10 +34,7 @@
       "dep_airport": "ICN",
       "arr_airport": "GMP",
       "airline": "Korean Air",
-      "takeoff_crash_prob": 0.001,
-      "landing_crash_prob": 0.003,
-      "emergency_prob": 0.005,
-      "delay_prob": 0.06
+      "priority": 25
     },
     {
       "flight_id": "KAL005",
@@ -55,10 +43,7 @@
       "dep_airport": "ICN",
       "arr_airport": "GMP",
       "airline": "Korean Air",
-      "takeoff_crash_prob": 0.002,
-      "landing_crash_prob": 0.004,
-      "emergency_prob": 0.007,
-      "delay_prob": 0.10
+      "priority": 35
     },
     {
       "flight_id": "ASA001",
@@ -67,10 +52,7 @@
       "dep_airport": "GMP",
       "arr_airport": "ICN",
       "airline": "Asiana",
-      "takeoff_crash_prob": 0.004,
-      "landing_crash_prob": 0.002,
-      "emergency_prob": 0.008,
-      "delay_prob": 0.15
+      "priority": 12
     },
     {
       "flight_id": "ASA002",
@@ -79,10 +61,7 @@
       "dep_airport": "ICN",
       "arr_airport": "GMP",
       "airline": "Asiana",
-      "takeoff_crash_prob": 0.001,
-      "landing_crash_prob": 0.005,
-      "emergency_prob": 0.009,
-      "delay_prob": 0.11
+      "priority": 28
     }
   ],
   "events": [

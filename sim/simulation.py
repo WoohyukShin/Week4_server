@@ -8,7 +8,9 @@ from utils.time_utils import int_to_hhmm, int_to_hhmm_colon, int_to_hhmm_str
 from sim.flight import FlightStatus
 from sim.schedule import Schedule
 from sim.event_handler import EventHandler
+from sim.weather import Weather
 import random
+import math
 
 class SimulationMode(Enum):
     INTERACTIVE = "interactive"   # WebSocket 연결, 시각화/수동 이벤트
@@ -42,6 +44,13 @@ class Simulation:
         
         # Loss 계산을 위한 속성들
         self.total_delay_loss = 0
+        self.total_safety_loss = 0
+        
+        # Score 계산을 위한 속성들
+        self.delay_scores = []  # 각 이착륙의 delay score 저장
+        self.safety_scores = []  # 각 이착륙의 safety score 저장
+        # Weather system (랜덤 날씨)
+        self.weather = Weather()
         
         self.initialize_schedules()
         self._init_landing_announce_events()
@@ -83,10 +92,11 @@ class Simulation:
                 elif self.time >= end_time_actual:
                     debug(f"시뮬레이션 종료, time={int_to_hhmm_colon(self.time)}")
                     
-                    # Loss 출력
-                    debug(f"=== 최종 Loss 결과 ===")
-                    debug(f"DELAY TERM: {self.total_delay_loss}")
-                    debug(f"TOTAL LOSS: {self.get_total_loss()}")
+                    # Score 출력
+                    debug(f"=== 최종 Score 결과 (100점 만점) ===")
+                    debug(f"DELAY SCORE: {self.get_delay_score():.1f}")
+                    debug(f"SAFETY SCORE: {self.get_safety_score():.1f}")
+                    debug(f"TOTAL SCORE: {self.get_total_score():.1f}")
                     debug(f"=====================")
                     
                     self.running = False
@@ -100,6 +110,10 @@ class Simulation:
 
     def update_status(self):
         debug(f"status updated at TIME: {int_to_hhmm_colon(self.time)} | 현재 스케즐 수 : {len(self.schedules)}")
+        
+        # 날씨 업데이트
+        self.weather.update_weather(self.time)
+        
         # 대충 활주로 관리
         for runway in self.airport.runways:
             if runway.closed:
@@ -138,18 +152,20 @@ class Simulation:
                         schedule.status = FlightStatus.TAXI_TO_RUNWAY
                         schedule.start_taxi_time = self.time
             case FlightStatus.TAXI_TO_RUNWAY:
-                # 실제 배정된 시간(ETD)에 이륙
+                # 실제 배정된 시간(ETD)에 이륙 (알고리즘이 이미 결정했으므로 강제 실행)
                 if schedule.is_takeoff and schedule.etd is not None and self.time >= schedule.etd:
-                    if self._can_takeoff(schedule):
-                        debug(f"{schedule.flight.flight_id} TAKING OFF ON RUNWAY {schedule.runway.get_current_direction()}")
-                        schedule.status = FlightStatus.TAKE_OFF
-                        schedule.takeoff_time = self.time
-                        schedule.atd = self.time  # 실제 이륙 시간 기록
-                        # 계획된 활주로 점유
-                        if schedule.runway:
-                            self._occupy_runway(schedule.runway, cooldown=3)
-                        # 이륙 지연 손실 계산
-                        self._add_delay_loss(schedule, self.time, "takeoff")
+                    debug(f"{schedule.flight.flight_id} TAKING OFF ON RUNWAY {schedule.runway.get_current_direction() if schedule.runway else 'Unknown'}")
+                    schedule.status = FlightStatus.TAKE_OFF
+                    schedule.takeoff_time = self.time
+                    schedule.atd = self.time  # 실제 이륙 시간 기록
+                    # 이륙 지연 손실 계산
+                    self._add_delay_loss(schedule, self.time, "takeoff")
+                    # 이륙 safety 손실 계산
+                    self._add_safety_loss(schedule, "takeoff")
+                    # 이륙 사고 확률 체크
+                    self._check_accident_probability(schedule, "takeoff")
+                    # 위험한 활주로 사용에 대한 추가 loss (이착륙 시작 시점에 체크)
+                    self._add_runway_safety_loss(schedule, "takeoff")
             case FlightStatus.TAKE_OFF:
                 if self.time - schedule.takeoff_time >= 1:
                     schedule.status = FlightStatus.DORMANT
@@ -158,16 +174,12 @@ class Simulation:
                         schedule.complete_time = self.time
                         debug(f"스케줄 완료: {schedule.flight.flight_id} (이륙 완료)")
             case FlightStatus.WAITING:
-                # 실제 배정된 시간(ETA)에 착륙
+                # 실제 배정된 시간(ETA)에 착륙 (알고리즘이 이미 결정했으므로 강제 실행)
                 if not schedule.is_takeoff and schedule.eta is not None and self.time >= schedule.eta:
-                    if self._can_land(schedule):
-                        runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
-                        debug(f"{schedule.flight.flight_id} LANDING ON RUNWAY {runway_direction}")
-                        schedule.status = FlightStatus.LANDING
-                        schedule.landing_time = self.time
-                        # 계획된 활주로 점유
-                        if schedule.runway:
-                            self._occupy_runway(schedule.runway, cooldown=3)
+                    runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
+                    debug(f"{schedule.flight.flight_id} LANDING ON RUNWAY {runway_direction}")
+                    schedule.status = FlightStatus.LANDING
+                    schedule.landing_time = self.time
             case FlightStatus.LANDING:
                 if self.time - schedule.landing_time >= 1:
                     schedule.status = FlightStatus.TAXI_TO_GATE
@@ -178,6 +190,12 @@ class Simulation:
                     schedule.ata = self.time  # 실제 착륙 시간 기록
                     # 착륙 지연 손실 계산
                     self._add_delay_loss(schedule, self.time, "landing")
+                    # 착륙 safety 손실 계산
+                    self._add_safety_loss(schedule, "landing")
+                    # 착륙 사고 확률 체크
+                    self._check_accident_probability(schedule, "landing")
+                    # 위험한 활주로 사용에 대한 추가 loss (착륙 시작 시점에 체크)
+                    self._add_runway_safety_loss(schedule, "landing")
             case FlightStatus.TAXI_TO_GATE:
                 if self.time - schedule.taxi_to_gate_time >= 1:
                     schedule.status = FlightStatus.DORMANT
@@ -193,29 +211,7 @@ class Simulation:
                 debug("스케줄 상태 변경 후 액션 재수행")
                 self.do_action()
 
-    def _can_takeoff(self, schedule):
-        """이륙 가능한 활주로 찾기"""
-        for runway in self.airport.runways:
-            if runway.closed:
-                continue
-            # 이륙용 활주로인지 확인 (14L 또는 32R)
-            current_direction = runway.get_current_direction()
-            if current_direction in ["14L", "32R"]:
-                if runway.can_handle_operation(self.time):
-                    return True
-        return False
-    
-    def _can_land(self, schedule):
-        """착륙 가능한 활주로 찾기"""
-        for runway in self.airport.runways:
-            if runway.closed:
-                continue
-            # 착륙용 활주로인지 확인 (14R 또는 32L)
-            current_direction = runway.get_current_direction()
-            if current_direction in ["14R", "32L"]:
-                if runway.can_handle_operation(self.time):
-                    return True
-        return False
+
     
     def _get_available_runway(self, operation_type):
         """작업 타입에 맞는 사용 가능한 활주로 반환"""
@@ -285,11 +281,24 @@ class Simulation:
         def status_to_str(s):
             return s.value
         flights = [self.schedule_to_flight_dict(s, status_to_str) for s in self.schedules]
+        
+        # 날씨 정보를 요청된 형식으로 변환
+        weather_info = self.weather.get_detailed_weather_info()
+        weather_array = [{
+            "condition": weather_info["condition"],
+            "visibility": weather_info["visibility"],
+            "wind_speed": weather_info["wind_speed"],
+            "wind_direction": weather_info["wind_direction"],
+            "temperature": weather_info["temperature"],
+            "pressure": weather_info["pressure"]
+        }]
+        
         return {
             "type": "state_update",
             "time": time_str,
             "flights": flights,
             "speed": self.speed,
+            "weather": weather_array,
             "timestamp": time.time()  # Add timestamp for synchronization
         }
 
@@ -332,7 +341,21 @@ class Simulation:
             )
 
     def _add_delay_loss(self, schedule, actual_time, operation_type):
-        """지연 손실 계산 및 누적 (정규화된 priority 기반 weighted sum)"""
+        """지연 손실 계산 및 누적 (Logistic decay 기반 score)"""
+        def logistic_decay_score(delay_min, priority):
+            # 중간 priority (32) 기준으로 60분 지연 시 0점이 되도록 설정
+            # PRI_MAX (64)는 32보다 약 1.5배 빠르게 감소하도록 조정
+            
+            # Priority를 0-1 범위로 정규화 (32를 기준으로)
+            normalized_priority = priority / 32.0
+            
+            # Logistic decay 함수: 100점에서 시작해서 지연에 따라 감소
+            # 중간 priority (32) 기준 60분 지연 시 0점
+            decay_rate = 0.1 * normalized_priority  # Priority가 높을수록 빠르게 감소
+            score = 100 / (1 + math.exp(decay_rate * (delay_min - 60)))
+            
+            return score
+        
         match operation_type:
             case "takeoff":
                 original_time = schedule.flight.etd
@@ -340,22 +363,20 @@ class Simulation:
                     return  # ETD가 없으면 지연 계산 불가
                 delay = actual_time - original_time
                 if delay > 0:
-                    # 정규화된 priority 사용 (0-1 범위)
-                    normalized_priority = schedule.get_normalized_priority()
-                    loss = normalized_priority * delay * 100  # 스케일 조정을 위해 100 곱함
-                    self.total_delay_loss += loss
-                    debug(f"이륙 지연 손실: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} (정규화: {normalized_priority:.2f}) -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
+                    # Logistic decay 기반 delay score 계산
+                    score = logistic_decay_score(delay, schedule.priority)
+                    self.delay_scores.append(score)
+                    debug(f"이륙 지연 score: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} -> score {score:.1f}")
             case "landing":
                 original_time = schedule.flight.eta
                 if original_time is None:
                     return  # ETA가 없으면 지연 계산 불가
                 delay = actual_time - original_time
                 if delay > 0:
-                    # 정규화된 priority 사용 (0-1 범위)
-                    normalized_priority = schedule.get_normalized_priority()
-                    loss = normalized_priority * delay * 100  # 스케일 조정을 위해 100 곱함
-                    self.total_delay_loss += loss
-                    debug(f"착륙 지연 손실: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} (정규화: {normalized_priority:.2f}) -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
+                    # Logistic decay 기반 delay score 계산
+                    score = logistic_decay_score(delay, schedule.priority)
+                    self.delay_scores.append(score)
+                    debug(f"착륙 지연 score: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} -> score {score:.1f}")
     
     def _add_go_around_loss(self, schedule):
         """Go-around 손실 계산 및 누적 (정규화된 priority 기반 weighted sum)"""
@@ -365,11 +386,167 @@ class Simulation:
         self.total_delay_loss += loss
         debug(f"Go-around 손실: {schedule.flight.flight_id} 15분 지연, priority {schedule.priority} (정규화: {normalized_priority:.2f}) -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
     
-
+    def _add_safety_loss(self, schedule, operation_type):
+        """날씨 기반 safety score 계산 (안전한 비행 시에는 큰 차이 없도록)"""
+        if operation_type == "takeoff":
+            risk_multiplier = self.weather.takeoff_risk_multiplier
+        else:  # landing
+            risk_multiplier = self.weather.landing_risk_multiplier
+        
+        # 기본 safety score (날씨가 좋을 때는 거의 만점)
+        base_safety_score = 95
+        
+        # 날씨 위험도에 따른 penalty 계산 (위험할수록 작은 penalty)
+        # risk_multiplier가 1.0일 때 penalty = 0, 2.0일 때 penalty = 5 정도
+        weather_penalty = max(0, (risk_multiplier - 1.0) * 5)
+        
+        # 최종 safety score 계산
+        safety_score = max(0, base_safety_score - weather_penalty)
+        
+        # Maximum safety loss threshold (이 값을 넘으면 score = 0)
+        max_safety_threshold = 500
+        
+        # Safety score를 loss로 변환하여 threshold 체크
+        safety_loss = base_safety_score - safety_score
+        
+        if safety_loss > max_safety_threshold:
+            safety_score = 0
+        
+        self.safety_scores.append(safety_score)
+        
+        detailed_weather = self.weather.get_detailed_weather_info()
+        debug(f"Safety score: {schedule.flight.flight_id} {operation_type}, weather: {detailed_weather['condition']}, visibility: {detailed_weather['visibility']}km, risk: {risk_multiplier:.2f} -> score {safety_score:.1f}")
+        
+        return safety_score
+    
+    def _check_accident_probability(self, schedule, operation_type):
+        """사고 확률 체크 및 crash 이벤트 발생"""
+        # 기본 사고 확률
+        base_accident_prob = 0.01  # 1%
+        
+        # Emergency landing은 더 높은 확률
+        if schedule.priority == 64:  # PRI_MAX
+            base_accident_prob = 0.05  # 5%
+        
+        # 날씨 위험도에 따른 확률 조정
+        if operation_type == "takeoff":
+            risk_multiplier = self.weather.takeoff_risk_multiplier
+        else:  # landing
+            risk_multiplier = self.weather.landing_risk_multiplier
+        
+        # 최종 사고 확률 계산 (위험도가 높을수록 확률 증가)
+        final_accident_prob = base_accident_prob * risk_multiplier
+        
+        # 사고 발생 여부 결정
+        if random.random() < final_accident_prob:
+            # Crash 이벤트 생성
+            crash_event = type('Event', (), {
+                'event_type': f'{operation_type.upper()}_CRASH',
+                'target': schedule.flight.flight_id,
+                'duration': random.randint(30, 120),  # 30-120분 활주로 폐쇄
+                'time': self.time
+            })()
+            
+            self.event_queue.append(crash_event)
+            
+            # 대량의 safety loss 추가
+            crash_safety_loss = 1000 * risk_multiplier * (1 + schedule.get_normalized_priority())
+            self.total_safety_loss += crash_safety_loss
+            
+            weather_info = self.weather.get_detailed_weather_info()
+            debug(f"🚨 CRASH EVENT: {schedule.flight.flight_id} {operation_type.upper()}_CRASH! Weather: {weather_info['condition']}, risk: {risk_multiplier:.2f}, prob: {final_accident_prob:.4f} -> {crash_safety_loss:.1f} safety loss 추가")
+            
+            return True
+        
+        return False
+    
+    def _add_runway_safety_loss(self, schedule, operation_type):
+        """위험한 활주로 사용에 대한 추가 loss (이착륙 시작 시점에 체크)"""
+        if not schedule.runway:
+            return
+        
+        runway = schedule.runway
+        safety_loss = 0.0
+        
+        # 1. 활주로가 닫혀있는 경우
+        if runway.closed:
+            safety_loss += 500.0 * schedule.get_normalized_priority()
+            debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using CLOSED runway {runway.get_current_direction()}")
+        
+        # 2. 활주로가 점유된 상태인 경우 (이착륙 시작 시점에 체크)
+        if runway.occupied and self.time < runway.next_available_time:
+            safety_loss += 300.0 * schedule.get_normalized_priority()
+            debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()}")
+        
+        # 3. 동시 이착륙 체크
+        self._check_simultaneous_operations(schedule, operation_type)
+        
+        if safety_loss > 0:
+            self.total_safety_loss += safety_loss
+            debug(f"Runway safety loss added: {safety_loss:.1f} for {schedule.flight.flight_id}")
+        
+        # 이착륙 시작 시점에 활주로 점유 (위험도 체크 후)
+        if operation_type == "takeoff":
+            self._occupy_runway(runway, cooldown=3)
+        else:  # landing
+            self._occupy_runway(runway, cooldown=3)
+    
+    def _check_simultaneous_operations(self, schedule, operation_type):
+        """동시 이착륙 체크 및 loss 추가"""
+        current_time = self.time
+        
+        # 현재 시간에 다른 이착륙이 있는지 확인
+        for other_schedule in self.schedules:
+            if other_schedule == schedule:
+                continue
+            
+            # 같은 시간에 이착륙하는 경우 체크
+            if operation_type == "takeoff":
+                if (other_schedule.status == FlightStatus.TAKE_OFF and 
+                    hasattr(other_schedule, 'takeoff_time') and 
+                    other_schedule.takeoff_time == current_time):
+                    self._add_simultaneous_operation_loss(schedule, other_schedule, "takeoff")
+            else:  # landing
+                if (other_schedule.status == FlightStatus.LANDING and 
+                    hasattr(other_schedule, 'landing_time') and 
+                    other_schedule.landing_time == current_time):
+                    self._add_simultaneous_operation_loss(schedule, other_schedule, "landing")
+    
+    def _add_simultaneous_operation_loss(self, schedule1, schedule2, operation_type):
+        """동시 이착륙에 대한 큰 loss 추가"""
+        self.total_safety_loss += 500
+        debug("SIMULTANEOUS OPERATION LOSS: 500")
     
     def get_total_loss(self):
         """총 손실 반환"""
-        return self.total_delay_loss
+        return self.total_delay_loss + self.total_safety_loss
+    
+    def get_delay_score(self):
+        """Delay score (100점 만점)"""
+        if not self.delay_scores:
+            return 100.0  # 지연이 없으면 만점
+        
+        # 모든 delay score의 평균
+        avg_delay_score = sum(self.delay_scores) / len(self.delay_scores)
+        return avg_delay_score
+    
+    def get_safety_score(self):
+        """Safety score (100점 만점)"""
+        if not self.safety_scores:
+            return 100.0  # safety 이슈가 없으면 만점
+        
+        # 모든 safety score의 평균
+        avg_safety_score = sum(self.safety_scores) / len(self.safety_scores)
+        return avg_safety_score
+    
+    def get_total_score(self):
+        """총 score (100점 만점) - delay와 safety의 평균"""
+        delay_score = self.get_delay_score()
+        safety_score = self.get_safety_score()
+        
+        # Delay와 Safety의 가중 평균 (각각 50%씩)
+        total_score = (delay_score + safety_score) / 2
+        return total_score
 
     def set_speed(self, speed):
         """Change simulation speed (1x, 2x, 4x, 8x)"""

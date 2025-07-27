@@ -15,7 +15,7 @@ class Weather:
     def __init__(self, initial_condition=None):
         self.condition = initial_condition or WeatherCondition.CLEAR
         self.visibility = self._get_visibility_for_condition(self.condition)
-        self.wind_speed = random.uniform(0, 20)  # 0-20 m/s
+        self.wind_speed = random.uniform(5, 25)  # 5-25 m/s (더 강한 초기 바람)
         self.wind_direction = random.uniform(0, 360)  # 0-360도
         self.temperature = random.uniform(-10, 35)  # -10~35도
         self.pressure = random.uniform(1000, 1020)  # hPa
@@ -23,9 +23,7 @@ class Weather:
         # Safety risk factors
         self.landing_risk_multiplier = self._calculate_landing_risk()
         self.takeoff_risk_multiplier = self._calculate_takeoff_risk()
-        
-        # Weather forecast (2시간 예보)
-        self.forecast = self._generate_forecast()
+        self.forecast = self._generate_forecast(360)
         
     def _get_visibility_for_condition(self, condition):
         """날씨 조건에 따른 시정 반환 (km)"""
@@ -104,50 +102,53 @@ class Weather:
             self.next_weather_change = time_step + random.randint(15, 25)
         
         if time_step >= self.next_weather_change:
-            if random.random() < 0.4:  # 40% 확률로 날씨 변화
+            if random.random() < 0.6:  # 60% 확률로 날씨 변화 (변동성 증가)
                 self._random_weather_change()
             # 다음 변화 시간 설정
             self.next_weather_change = time_step + random.randint(15, 25)
         
-        # 시정, 바람 등 세부 조건은 매분 약간씩 변화 (점진적 변화)
-        self.visibility += random.uniform(-0.1, 0.1)  # 더 작은 변화
-        self.visibility = max(0.1, min(50, self.visibility))  # 0.1-50km 범위 제한
+        # 시정, 바람 등 세부 조건은 매분 더 큰 변화 (변동성 증가)
+        self.visibility += random.uniform(-0.3, 0.3)  # 더 큰 변화
+        self.visibility = max(0.1, min(50, self.visibility))
         
-        self.wind_speed += random.uniform(-0.5, 0.5)  # 더 작은 변화
-        self.wind_speed = max(0, min(30, self.wind_speed))  # 0-30 m/s 범위 제한
+        self.wind_speed += random.uniform(-1.0, 1.0)  # 더 큰 변화
+        self.wind_speed = max(0, min(30, self.wind_speed))
         
         # 위험도 재계산
         self.landing_risk_multiplier = self._calculate_landing_risk()
         self.takeoff_risk_multiplier = self._calculate_takeoff_risk()
         
-        # 예보는 30분마다 업데이트 (더 안정적인 예보)
-        if time_step % 30 == 0:
-            self.forecast = self._generate_forecast()
+        # 예보는 5분마다 업데이트
+        if time_step % 5 == 0:
+            self.forecast = self._generate_forecast(time_step)
             debug(f"Weather forecast updated at {time_step}: {self.condition.value}, visibility: {self.visibility:.1f}km, wind: {self.wind_speed:.1f}m/s")
         else:
             debug(f"Weather update: {self.condition.value}, visibility: {self.visibility:.1f}km, wind: {self.wind_speed:.1f}m/s")
     
-    def _generate_forecast(self):
-        """2시간 예보 생성"""
+    def _generate_forecast(self, current_time):
+        """2시간 예보 생성 (실제 시간 기준, 5분 간격)"""
         forecast = []
         current_condition = self.condition
         current_visibility = self.visibility
         current_wind = self.wind_speed
         
-        for hour in range(1, 3):  # 1시간 후, 2시간 후
-            # 예보 정확도 (시간이 지날수록 부정확하지만 더 현실적)
-            accuracy = 1.0 - (hour * 0.15)  # 1시간 후 85%, 2시간 후 70% 정확도
+        # 현재 시간부터 5분 간격으로 2시간 (120분) 예보
+        for minutes_ahead in range(5, 125, 5):  # 5분, 10분, 15분, ..., 120분
+            forecast_time = current_time + minutes_ahead
+            
+            # 예보 정확도 (시간이 지날수록 부정확)
+            accuracy = 1.0 - (minutes_ahead / 120 * 0.4)  # 5분 후 96.7%, 120분 후 60%
             
             if random.random() < accuracy:
-                # 현재 조건에서 점진적 변화 (더 현실적)
+                # 현재 조건에서 점진적 변화 (더 큰 변동성)
                 forecast_condition = current_condition
-                forecast_visibility = current_visibility + random.uniform(-1.0, 1.0)
-                forecast_wind = current_wind + random.uniform(-3, 3)
+                forecast_visibility = current_visibility + random.uniform(-0.5, 0.5)  # 더 큰 변화
+                forecast_wind = current_wind + random.uniform(-1.5, 1.5)  # 더 큰 변화
             else:
-                # 다른 조건으로 변화 (더 자연스러운 전환)
+                # 다른 조건으로 변화 (더 큰 변동성)
                 forecast_condition = self._get_natural_transition(current_condition)
                 forecast_visibility = self._get_visibility_for_condition(forecast_condition)
-                forecast_wind = current_wind + random.uniform(-5, 5)
+                forecast_wind = current_wind + random.uniform(-2.5, 2.5)  # 더 큰 변화
             
             # 범위 제한
             forecast_visibility = max(0.1, min(50, forecast_visibility))
@@ -157,13 +158,11 @@ class Weather:
             forecast_landing_risk = self._calculate_forecast_risk(forecast_condition, forecast_visibility, forecast_wind, "landing")
             forecast_takeoff_risk = self._calculate_forecast_risk(forecast_condition, forecast_visibility, forecast_wind, "takeoff")
             
+            # 실제 시간 기준 형식: {time: 355, takeoff_risk: 1.0, landing_risk: 1.2}
             forecast.append({
-                "hour": hour,
-                "condition": forecast_condition.value,
-                "visibility": round(forecast_visibility, 1),
-                "wind_speed": round(forecast_wind, 1),
-                "landing_risk": round(forecast_landing_risk, 2),
-                "takeoff_risk": round(forecast_takeoff_risk, 2)
+                "time": forecast_time,  # 실제 시간 (분)
+                "takeoff_risk": round(forecast_takeoff_risk, 2),
+                "landing_risk": round(forecast_landing_risk, 2)
             })
             
             # 다음 시간을 위한 현재 조건 업데이트
@@ -277,6 +276,10 @@ class Weather:
             "takeoff_risk": round(self.takeoff_risk_multiplier, 2),
             "forecast": self.forecast
         }
+    
+    def get_forecast_for_action(self):
+        """DO_ACTION용 날씨 예보 반환 (간단한 리스트 형식)"""
+        return self.forecast  # [[TIME, TAKEOFF_RISK, LANDING_RISK], ...]
     
     def get_detailed_weather_info(self):
         """상세 날씨 정보 반환 (프론트엔드용)"""

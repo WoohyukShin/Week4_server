@@ -49,13 +49,8 @@ def main():
     start_time = max(360, min_etd - 20)  # 최소 0600, 또는 첫 비행 ETD - 20분
     end_time = None  # 시뮬레이션에서 자동 결정
 
-<<<<<<< HEAD
     use_ws = False  # WebSocket
     is_training = False  # 강화학습 반복용 (랜덤 시나리오 사용 시 True 권장)
-=======
-    use_ws = True  # WebSocket 서버 비활성화
-    is_training = False  # 강화학습 반복용
->>>>>>> e993169b8076032fbdb21b21683ca1869021930b
 
     if is_training:
         mode = SimulationMode.TRAINING

@@ -355,15 +355,21 @@ class Simulation:
 
     def on_event(self, event):
         debug(f"프론트에서 이벤트 수신: {event}")
-        # 프론트에서 온 이벤트 처리
+        # 프론트에서 온 이벤트를 즉시 핸들링
         # event dict를 Event 객체로 변환
         class E: pass
         e = E()
         e.event_type = event['event_type']
         e.target = event['target']
         e.duration = event.get('duration', 0)
-        e.time = self.time + 1
-        self.event_queue.append(e)
+        e.time = self.time  # 현재 시간으로 설정
+        
+        # 즉시 핸들링
+        self.event_handler.handle(e, self.time)
+        
+        # 즉시 액션 재수행
+        debug("프론트 이벤트 즉시 처리 후 액션 재수행")
+        self.do_action()
 
     def _init_landing_announce_events(self):
         for flight in self.landing_flights:

@@ -8,7 +8,8 @@ class Schedule:
         self.status = FlightStatus.DORMANT
         self.location = None
         self.start_taxi_time = None
-        self.etd = None
+        self.etd = flight.etd  # 초기값을 flight.etd로 설정
+        self.eta = flight.eta  # 초기값을 flight.eta로 설정
         self.atd = None
         self.is_takeoff = is_takeoff
         self.landing_time = None

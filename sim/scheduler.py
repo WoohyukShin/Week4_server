@@ -22,8 +22,25 @@ class Scheduler:
         
         # 새롭게 재배정된 결과를 출력
         self._debug_schedule_times(schedules, current_time, result)
+        debug("=====NEW SCHEDULER RESULT=====")
+        # 모든 schedule 시간 순으로 출력
+        schedule_times = []
+        for schedule in schedules:
+            if schedule.is_takeoff:
+                time = result.get(schedule.flight.flight_id, schedule.etd) if result else schedule.etd
+                if time is not None:
+                    schedule_times.append((schedule.flight.flight_id, time))
+            else:
+                time = result.get(schedule.flight.flight_id, schedule.eta) if result else schedule.eta
+                if time is not None:
+                    schedule_times.append((schedule.flight.flight_id, time))
         
-        debug(f"scheduler result: {result}")
+        # 시간 순서대로 정렬
+        schedule_times.sort(key=lambda x: x[1])
+        
+        for flight_id, time in schedule_times:
+            debug(f"{flight_id} : {int_to_hhmm_colon(time)}")
+        debug("===========================")
         return result
     
     def greedy(self, schedules, current_time, event_queue=None):
@@ -45,14 +62,17 @@ class Scheduler:
         takeoff_schedules = [s for s in schedules if s.is_takeoff and s.status == FlightStatus.DORMANT]
         landing_schedules = [s for s in schedules if not s.is_takeoff and s.status == FlightStatus.WAITING]
         
+        # debug(f"takeoff_schedules: {len(takeoff_schedules)} 개 존재함...")
+        # debug(f"landing_schedules: {len(landing_schedules)} 개 존재함...")
+
         # 이륙 스케줄 그리디 처리
-        takeoff_schedules.sort(key=lambda s: s.flight.etd)  # ETD 순으로 정렬
+        takeoff_schedules.sort(key=lambda s: s.etd)  # ETD 순으로 정렬
         takeoff_runway_available_time = current_time
         
         for schedule in takeoff_schedules:
             # 택시 시작 시간 계산 (이륙 15분 전)
-            taxi_start_time = max(current_time, schedule.flight.etd - 15)
-            takeoff_time = taxi_start_time + 15  # 15분 택시 후 이륙
+            taxi_start_time = max(current_time, schedule.etd - 10)
+            takeoff_time = taxi_start_time + 10   # 10분 택시 후 이륙
             
             # 활주로 폐쇄 고려
             for closure in runway_closures:
@@ -63,19 +83,19 @@ class Scheduler:
             if takeoff_time < takeoff_runway_available_time:
                 takeoff_time = takeoff_runway_available_time
             
-            # 변경사항 기록
-            if takeoff_time != schedule.flight.etd:
-                changes[schedule.flight.flight_id] = takeoff_time
+            debug(f"{schedule.flight.flight_id} 조정된 이륙 시간 : {int_to_hhmm_colon(takeoff_time)}")
+            # 모든 이륙 스케줄 업데이트
+            changes[schedule.flight.flight_id] = takeoff_time
             
             # 다음 이륙 활주로 사용 가능 시간 (이륙 1분 + 쿨다운 3분)
             takeoff_runway_available_time = takeoff_time + 4
         
         # 착륙 스케줄 그리디 처리
-        landing_schedules.sort(key=lambda s: s.flight.eta)  # ETA 순으로 정렬
+        landing_schedules.sort(key=lambda s: s.eta)  # ETA 순으로 정렬
         landing_runway_available_time = current_time
         
         for schedule in landing_schedules:
-            eta = schedule.flight.eta if schedule.flight.eta is not None else current_time
+            eta = schedule.eta if schedule.eta is not None else current_time
             landing_time = max(current_time, eta, landing_runway_available_time)
             
             # 활주로 폐쇄 고려
@@ -83,9 +103,19 @@ class Scheduler:
                 if closure['start_time'] <= landing_time <= closure['end_time']:
                     landing_time = closure['end_time'] + 1  # 폐쇄 후 첫 가능 시간
             
-            # 변경사항 기록
-            if landing_time != schedule.flight.eta:
-                changes[schedule.flight.flight_id] = landing_time
+            # 착륙 시간이 이륙 시간과 겹치지 않도록 조정
+            min_landing_gap = 1  # 최소 1분 간격
+            for takeoff_schedule in takeoff_schedules:
+                takeoff_id = takeoff_schedule.flight.flight_id
+                if takeoff_id in changes:
+                    takeoff_time = changes[takeoff_id]
+                    if abs(landing_time - takeoff_time) < min_landing_gap:
+                        # 착륙 시간을 이륙 시간 + 간격으로 조정
+                        landing_time = takeoff_time + min_landing_gap
+            
+            # 모든 착륙 스케줄 업데이트
+            debug(f"{schedule.flight.flight_id} 조정된 착륙 시간 : {int_to_hhmm_colon(landing_time)}")
+            changes[schedule.flight.flight_id] = landing_time
             
             # 다음 착륙 활주로 사용 가능 시간 (착륙 1분 + 쿨다운 3분)
             landing_runway_available_time = landing_time + 4
@@ -110,14 +140,14 @@ class Scheduler:
         
         for schedule in schedules:
             if schedule.is_takeoff:
-                # 변경사항이 있으면 변경된 시간 사용, 없으면 원래 ETD 사용
-                time = changes.get(schedule.flight.flight_id, schedule.flight.etd) if changes else schedule.flight.etd
+                # 변경사항이 있으면 변경된 시간 사용, 없으면 스케줄 ETD 사용
+                time = changes.get(schedule.flight.flight_id, schedule.etd) if changes else schedule.etd
                 if time is not None:
                     schedule_times.append((schedule.flight.flight_id, time, "takeoff"))
                     debug(f"이륙 스케줄: {schedule.flight.flight_id} ETD={int_to_hhmm_colon(time)}")
             else:
-                # 변경사항이 있으면 변경된 시간 사용, 없으면 원래 ETA 사용
-                time = changes.get(schedule.flight.flight_id, schedule.flight.eta) if changes else schedule.flight.eta
+                # 변경사항이 있으면 변경된 시간 사용, 없으면 스케줄 ETA 사용
+                time = changes.get(schedule.flight.flight_id, schedule.eta) if changes else schedule.eta
                 if time is not None:
                     schedule_times.append((schedule.flight.flight_id, time, "landing"))
                     debug(f"착륙 스케줄: {schedule.flight.flight_id} ETA={int_to_hhmm_colon(time)}")

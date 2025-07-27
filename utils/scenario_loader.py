@@ -26,6 +26,6 @@ def load_scenario(path):
     flights = [Flight(**fd) for fd in data.get('flights', [])]
     takeoff_flights = [f for f in flights if f.dep_airport == "GMP"]
     landing_flights = [f for f in flights if f.arr_airport == "GMP"]
-    schedules = [Schedule(f) for f in takeoff_flights]
+    schedules = [Schedule(f, is_takeoff=True) for f in takeoff_flights]
     events = [Event(e['event_type'], e['target_type'], e['target'], e['time'], e['duration']) for e in data.get('events', [])]
     return schedules, landing_flights, events 

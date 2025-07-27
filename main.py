@@ -23,7 +23,7 @@ def main():
 
     # 시작/종료 시간 계산
     min_etd = min([s.flight.etd for s in schedules]) if schedules else 0
-    start_time = min_etd - 20
+    start_time = min_etd - 3
     end_time = None  # 시뮬레이션에서 자동 결정
 
     use_ws = True  # WebSocket 서버 비활성화

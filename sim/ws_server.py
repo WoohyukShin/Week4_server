@@ -23,6 +23,17 @@ class WebSocketServer:
                 if data.get("type") == "event":
                     # 프론트에서 event 발생 시
                     self.simulation.on_event(data["event"])
+                elif data.get("type") == "speed_control":
+                    # 프론트에서 속도 변경 요청
+                    speed = data.get("speed", 1)
+                    success = self.simulation.set_speed(speed)
+                    # Send confirmation back to frontend
+                    response = {
+                        "type": "speed_control_response",
+                        "success": success,
+                        "speed": speed if success else self.simulation.speed
+                    }
+                    await websocket.send(json.dumps(response))
         except websockets.ConnectionClosed:
             debug("클라이언트 연결 종료")
         finally:

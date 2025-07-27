@@ -31,6 +31,15 @@ class Simulation:
         self.event_handler = EventHandler(self)
         self.scheduler = Scheduler("greedy")
         
+        # Speed control
+        self.speed = 1  # 1x, 2x, 4x, 8x
+        self.speed_intervals = {
+            1: 24,   # 1x: 24 seconds per sim minute
+            2: 12,   # 2x: 12 seconds per sim minute  
+            4: 6,    # 4x: 6 seconds per sim minute
+            8: 3     # 8x: 3 seconds per sim minute
+        }
+        
         # Loss 계산을 위한 속성들
         self.total_delay_loss = 0
         self.safety_loss = 0
@@ -48,7 +57,7 @@ class Simulation:
     def start(self, start_time=0, end_time=None):
         self.time = start_time
         self.running = True
-        debug(f"시뮬레이션 시작, time={int_to_hhmm_colon(self.time)}, mode={self.mode}")
+        debug(f"시뮬레이션 시작, time={int_to_hhmm_colon(self.time)}, mode={self.mode}, speed={self.speed}x")
         
         # 시뮬레이션 시작 시 초기 액션 수행
         self.do_action()
@@ -57,11 +66,12 @@ class Simulation:
         end_time_actual = None
         while self.running:
             self.update_status()
-            # Send state update every 10 timesteps (10 sim minutes) to match frontend rate
+        
             self.send_state_update()
             self.handle_events()
             if self.mode == SimulationMode.INTERACTIVE:
-                time.sleep(24)
+                sleep_interval = self.speed_intervals.get(self.speed, 24)
+                time.sleep(sleep_interval)
             self.time += 1
             # 완료된 뒤 3 timestep이 지난 스케줄은 schedules에서 제거하고 completed_schedules로 이동
             to_remove = []
@@ -292,14 +302,16 @@ class Simulation:
             self.ws.send(state)
 
     def get_state(self):
-        time = int_to_hhmm_colon(self.time)  # Returns "HH:MM" string format
+        time_str = int_to_hhmm_colon(self.time)  # Returns "HH:MM" string format
         def status_to_str(s):
             return s.value
         flights = [self.schedule_to_flight_dict(s, status_to_str) for s in self.schedules]
         return {
             "type": "state_update",
-            "time": time,
-            "flights": flights
+            "time": time_str,
+            "flights": flights,
+            "speed": self.speed,
+            "timestamp": time.time()  # Add timestamp for synchronization
         }
 
     def schedule_to_flight_dict(self, schedule, status_to_str):
@@ -418,3 +430,14 @@ class Simulation:
     def get_total_loss(self):
         """총 손실 반환"""
         return self.total_delay_loss + self.safety_loss
+
+    def set_speed(self, speed):
+        """Change simulation speed (1x, 2x, 4x, 8x)"""
+        if speed in [1, 2, 4, 8]:
+            old_speed = self.speed
+            self.speed = speed
+            debug(f"시뮬레이션 속도 변경: {old_speed}x → {speed}x")
+            return True
+        else:
+            debug(f"잘못된 속도 설정: {speed}. 가능한 값: 1, 2, 4, 8")
+            return False

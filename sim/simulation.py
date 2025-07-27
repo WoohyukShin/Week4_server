@@ -29,7 +29,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("greedy")
+        self.scheduler = Scheduler("greedy", self)
         
         # Speed control
         self.speed = 1  # 1x, 2x, 4x, 8x
@@ -139,31 +139,24 @@ class Simulation:
                 if schedule.is_takeoff and schedule.etd is not None:
                     taxi_start_time = schedule.etd - 10
                     if self.time >= taxi_start_time:
-                        debug(f"{schedule.flight.flight_id} TAXIING...")
+                        debug(f"{schedule.flight.flight_id} TAXIING TO RUNWAY {schedule.runway.get_current_direction()}")
                         schedule.status = FlightStatus.TAXI_TO_RUNWAY
-                        schedule.location = "G2"
                         schedule.start_taxi_time = self.time
             case FlightStatus.TAXI_TO_RUNWAY:
                 # 실제 배정된 시간(ETD)에 이륙
                 if schedule.is_takeoff and schedule.etd is not None and self.time >= schedule.etd:
                     if self._can_takeoff(schedule):
-                        debug(f"{schedule.flight.flight_id} TAKING OFF...")
+                        debug(f"{schedule.flight.flight_id} TAKING OFF ON RUNWAY {schedule.runway.get_current_direction()}")
                         schedule.status = FlightStatus.TAKE_OFF
-
-                        # 이륙용 활주로 찾기
-                        for r in self.airport.runways:
-                            if r.get_current_direction() in ["14L", "32R"] and not r.closed:
-                                schedule.location = r.get_current_direction()
-                                schedule.takeoff_time = self.time
-                                schedule.atd = self.time  # 실제 이륙 시간 기록
-                                self._occupy_runway(r, cooldown=3)
-                                # 이륙 지연 손실 계산
-                                self._add_delay_loss(schedule, self.time, "takeoff")
-                                break
+                        schedule.takeoff_time = self.time
+                        schedule.atd = self.time  # 실제 이륙 시간 기록
+                        # 계획된 활주로 점유
+                        self._occupy_runway(schedule.runway, cooldown=3)
+                        # 이륙 지연 손실 계산
+                        self._add_delay_loss(schedule, self.time, "takeoff")
             case FlightStatus.TAKE_OFF:
                 if self.time - schedule.takeoff_time >= 1:
                     schedule.status = FlightStatus.DORMANT
-                    schedule.location = "Airborne"
                     # 이륙 완료 시 complete_time 기록
                     if not hasattr(schedule, 'complete_time'):
                         schedule.complete_time = self.time
@@ -172,19 +165,15 @@ class Simulation:
                 # 실제 배정된 시간(ETA)에 착륙
                 if not schedule.is_takeoff and schedule.eta is not None and self.time >= schedule.eta:
                     if self._can_land(schedule):
-                        debug(f"{schedule.flight.flight_id} LANDING...")
+                        debug(f"{schedule.flight.flight_id} LANDING ON RUNWAY {schedule.runway.get_current_direction()}")
                         schedule.status = FlightStatus.LANDING
-
-                        # 착륙용 활주로 찾기
-                        for r in self.airport.runways:
-                            if r.get_current_direction() in ["14R", "32L"] and not r.closed:
-                                schedule.location = r.get_current_direction()
-                                schedule.landing_time = self.time
-                                self._occupy_runway(r, cooldown=3)
-                                break
+                        schedule.landing_time = self.time
+                        # 계획된 활주로 점유
+                        self._occupy_runway(schedule.runway, cooldown=3)
             case FlightStatus.LANDING:
                 if self.time - schedule.landing_time >= 1:
                     schedule.status = FlightStatus.TAXI_TO_GATE
+                    debug(f"{schedule.flight.flight_id} TAXIING TO GATE {schedule.runway.get_current_direction()}")
                     schedule.taxi_to_gate_time = self.time
                     schedule.location = "Gate"
                     schedule.ata = self.time  # 실제 착륙 시간 기록
@@ -193,7 +182,6 @@ class Simulation:
             case FlightStatus.TAXI_TO_GATE:
                 if self.time - schedule.taxi_to_gate_time >= 1:
                     schedule.status = FlightStatus.DORMANT
-                    schedule.location = "Gate"
                     # 착륙 완료 시 complete_time 기록
                     if not hasattr(schedule, 'complete_time'):
                         schedule.complete_time = self.time
@@ -314,21 +302,6 @@ class Simulation:
 
     def schedule_to_flight_dict(self, schedule, status_to_str):
         f = schedule.flight
-        # runway: 현재 활주로의 방향 정보
-        runway = None
-        match schedule.status:
-            case FlightStatus.TAKE_OFF:
-                # 이륙용 활주로 찾기
-                for r in self.airport.runways:
-                    if r.get_current_direction() in ["14L", "32R"] and not r.closed:
-                        runway = r.get_current_direction()
-                        break
-            case FlightStatus.LANDING:
-                # 착륙용 활주로 찾기
-                for r in self.airport.runways:
-                    if r.get_current_direction() in ["14R", "32L"] and not r.closed:
-                        runway = r.get_current_direction()
-                        break
         return {
             "flight_id": f.flight_id,
             "status": status_to_str(schedule.status),
@@ -337,7 +310,7 @@ class Simulation:
             "depAirport": f.dep_airport,
             "arrivalAirport": f.arr_airport,
             "airline": f.airline,
-            "runway": runway
+            "runway": schedule.runway.get_current_direction() if hasattr(schedule, 'runway') and schedule.runway else None
         }
 
     def on_event(self, event):

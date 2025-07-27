@@ -12,6 +12,9 @@ class EventHandler:
         duration = event.duration
         debug(f"{etype}({target}) at {current_time} (duration={duration})")
         
+        # WebSocket으로 프론트엔드에 이벤트 정보 전송
+        self._send_event_to_frontend(etype, target, duration, current_time)
+        
         match etype:
             case "EMERGENCY_LANDING":
                 self._emergency_landing(target, duration, current_time)
@@ -122,3 +125,38 @@ class EventHandler:
             landing_schedule = Schedule(flight, is_takeoff=False)
             landing_schedule.status = FlightStatus.WAITING
             self.sim.schedules.append(landing_schedule)
+    
+    def _send_event_to_frontend(self, event_type, target, duration, current_time):
+        """WebSocket으로 프론트엔드에 이벤트 정보 전송"""
+        if not self.sim.ws:
+            return
+        
+        # 이벤트 타입에 따른 targetType 결정
+        target_type = self._get_target_type(event_type)
+        
+        event_data = {
+            "type": "event",
+            "time": current_time,
+            "event": {
+                "event_type": event_type,
+                "targetType": target_type,
+                "target": target,
+                "duration": duration
+            }
+        }
+        
+        try:
+            self.sim.ws.send(event_data)
+            debug(f"이벤트 전송: {event_type} -> 프론트엔드")
+        except Exception as e:
+            debug(f"이벤트 전송 실패: {e}")
+    
+    def _get_target_type(self, event_type):
+        """이벤트 타입에 따른 targetType 반환"""
+        match event_type:
+            case "EMERGENCY_LANDING" | "FLIGHT_CANCEL" | "FLIGHT_DELAY" | "GO_AROUND" | "TAKEOFF_CRASH" | "LANDING_CRASH" | "LANDING_ANNOUNCE":
+                return "Flight"
+            case "RUNWAY_CLOSURE" | "RUNWAY_INVERT":
+                return "Runway"
+            case _:
+                return ""

@@ -50,7 +50,7 @@ def main():
     end_time = None  # 시뮬레이션에서 자동 결정
 
     use_ws = False  # WebSocket
-    is_training = True  # 강화학습 반복용 (랜덤 시나리오 사용 시 True 권장)
+    is_training = False  # 강화학습 반복용 (랜덤 시나리오 사용 시 True 권장)
 
     if is_training:
         mode = SimulationMode.TRAINING

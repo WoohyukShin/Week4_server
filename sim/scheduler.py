@@ -10,7 +10,8 @@ class Scheduler:
         self.sim = sim
     
     def optimize(self, schedules, current_time, event_queue=None, forecast=None):
-        """스케줄 최적화 메인 메서드"""
+        """ event_queue : 관측 가능한 예정된 모든 이벤트 (지금은 RWY_CLOSUIRE, RWY_INVERT만 존재) """
+        """ 스케줄 최적화 메인 메서드 """
         match self.algorithm:
             case "greedy":
                 result =  self.greedy(schedules, current_time, event_queue, forecast)
@@ -51,6 +52,7 @@ class Scheduler:
         # 미완료 이벤트 고려 (예: 활주로 폐쇄 예정)
         runway_closures = []
         if event_queue:
+            debug(f"관측 가능한 이벤트: {len(event_queue)}개")
             for event in event_queue:
                 if event.event_type == "RUNWAY_CLOSURE":
                     runway_closures.append({
@@ -58,6 +60,9 @@ class Scheduler:
                         'start_time': event.time,
                         'end_time': event.time + event.duration
                     })
+                    debug(f"  - {event.event_type}: {event.target} ({int_to_hhmm_colon(event.time)} ~ {int_to_hhmm_colon(event.time + event.duration)})")
+                elif event.event_type == "RUNWAY_INVERT":
+                    debug(f"  - {event.event_type}: {int_to_hhmm_colon(event.time)}")
         
         # 이륙 스케줄과 착륙 스케줄 분리
         takeoff_schedules = [s for s in schedules if s.is_takeoff and s.status == FlightStatus.DORMANT]

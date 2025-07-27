@@ -277,8 +277,11 @@ class Simulation:
             for i, forecast in enumerate(weather_forecast[:3]):
                 debug(f"  {forecast['time']}분: 이륙위험 {forecast['takeoff_risk']}, 착륙위험 {forecast['landing_risk']}")
         
-        # 현재 스케줄 상태와 미완료 이벤트를 알고리즘에 전달
-        changes = self.scheduler.optimize(self.schedules, self.time, self.event_queue, weather_forecast)
+        # Agent에게 전달할 관측 가능한 이벤트만 필터링
+        observed_events = self.get_observed_events()
+        
+        # 현재 스케줄 상태와 관측 가능한 이벤트를 알고리즘에 전달
+        changes = self.scheduler.optimize(self.schedules, self.time, observed_events, weather_forecast)
         
         # 변경사항을 스케줄에 적용
         if changes:
@@ -358,7 +361,7 @@ class Simulation:
         e.event_type = event['event_type']
         e.target = event['target']
         e.duration = event.get('duration', 0)
-        e.time = self.time
+        e.time = self.time + 1
         self.event_queue.append(e)
 
     def _init_landing_announce_events(self):
@@ -614,6 +617,17 @@ class Simulation:
             "total_safety_loss": self.total_safety_loss,
             "safety_breakdown": self.safety_loss_breakdown.copy()
         }
+    
+    def get_observed_events(self):
+        """Agent에게 전달할 관측 가능한 이벤트만 반환"""
+        observed_events = []
+        
+        for event in self.event_queue:
+            # 예정된 일정만 전달 (긴급/예측 불가능한 이벤트는 제외)
+            if event.event_type in ["RUNWAY_CLOSURE", "RUNWAY_INVERT"]:
+                observed_events.append(event)
+        
+        return observed_events
 
     def set_speed(self, speed):
         """Change simulation speed (1x, 2x, 4x, 8x)"""

@@ -34,12 +34,13 @@ class Simulation:
         self.scheduler = Scheduler("greedy", self)
         
         # Speed control
-        self.speed = 1  # 1x, 2x, 4x, 8x
+        self.speed = 1  # 1x, 2x, 4x, 8x, 64x
         self.speed_intervals = {
             1: 24,   # 1x: 24 seconds per sim minute
             2: 12,   # 2x: 12 seconds per sim minute  
             4: 6,    # 4x: 6 seconds per sim minute
-            8: 3     # 8x: 3 seconds per sim minute
+            8: 3,    # 8x: 3 seconds per sim minute
+            64: 0.375 # 64x: 0.375 seconds per sim minute (very fast!)
         }
         
         # Loss 계산을 위한 속성들
@@ -616,12 +617,12 @@ class Simulation:
         }
 
     def set_speed(self, speed):
-        """Change simulation speed (1x, 2x, 4x, 8x)"""
-        if speed in [1, 2, 4, 8]:
+        """Change simulation speed (1x, 2x, 4x, 8x, 64x)"""
+        if speed in [1, 2, 4, 8, 64]:
             old_speed = self.speed
             self.speed = speed
             debug(f"시뮬레이션 속도 변경: {old_speed}x → {speed}x")
             return True
         else:
-            debug(f"잘못된 속도 설정: {speed}. 가능한 값: 1, 2, 4, 8")
+            debug(f"잘못된 속도 설정: {speed}. 가능한 값: 1, 2, 4, 8, 64")
             return False

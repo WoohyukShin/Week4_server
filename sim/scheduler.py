@@ -66,8 +66,8 @@ class Scheduler:
         # debug(f"takeoff_schedules: {len(takeoff_schedules)} 개 존재함...")
         # debug(f"landing_schedules: {len(landing_schedules)} 개 존재함...")
 
-        # 이륙 스케줄 그리디 처리
-        takeoff_schedules.sort(key=lambda s: s.etd)  # ETD 순으로 정렬
+        # 이륙 스케줄 그리디 처리 (priority 우선, 그 다음 ETD 순)
+        takeoff_schedules.sort(key=lambda s: (-s.priority, s.etd))  # priority 높은 순, 같은 priority면 ETD 순
         takeoff_runway_available_time = current_time
         
         for schedule in takeoff_schedules:
@@ -92,15 +92,15 @@ class Scheduler:
                     schedule.runway = runway
                     break
             
-            debug(f"{schedule.flight.flight_id} 조정된 이륙 시간 : {int_to_hhmm_colon(takeoff_time)}")
+            debug(f"{schedule.flight.flight_id} (priority {schedule.priority}) 조정된 이륙 시간 : {int_to_hhmm_colon(takeoff_time)}")
             # 모든 이륙 스케줄 업데이트
             changes[schedule.flight.flight_id] = takeoff_time
             
             # 다음 이륙 활주로 사용 가능 시간 (이륙 1분 + 쿨다운 3분)
             takeoff_runway_available_time = takeoff_time + 4
         
-        # 착륙 스케줄 그리디 처리
-        landing_schedules.sort(key=lambda s: s.eta)  # ETA 순으로 정렬
+        # 착륙 스케줄 그리디 처리 (priority 우선, 그 다음 ETA 순)
+        landing_schedules.sort(key=lambda s: (-s.priority, s.eta))  # priority 높은 순, 같은 priority면 ETA 순
         landing_runway_available_time = current_time
         
         for schedule in landing_schedules:
@@ -131,7 +131,7 @@ class Scheduler:
                     break
             
             # 모든 착륙 스케줄 업데이트
-            debug(f"{schedule.flight.flight_id} 조정된 착륙 시간 : {int_to_hhmm_colon(landing_time)}")
+            debug(f"{schedule.flight.flight_id} (priority {schedule.priority}) 조정된 착륙 시간 : {int_to_hhmm_colon(landing_time)}")
             changes[schedule.flight.flight_id] = landing_time
             
             # 다음 착륙 활주로 사용 가능 시간 (착륙 1분 + 쿨다운 3분)

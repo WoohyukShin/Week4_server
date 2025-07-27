@@ -43,8 +43,6 @@ class Simulation:
         # Loss 계산을 위한 속성들
         self.total_delay_loss = 0
         
-
-        
         self.initialize_schedules()
         self._init_landing_announce_events()
 
@@ -64,7 +62,6 @@ class Simulation:
         end_time_actual = None
         while self.running:
             self.update_status()
-        
             self.send_state_update()
             self.handle_events()
             if self.mode == SimulationMode.INTERACTIVE:
@@ -103,7 +100,7 @@ class Simulation:
 
     def update_status(self):
         debug(f"status updated at TIME: {int_to_hhmm_colon(self.time)} | 현재 스케즐 수 : {len(self.schedules)}")
-        
+        # 대충 활주로 관리
         for runway in self.airport.runways:
             if runway.closed:
                 if runway.next_available_time >= self.time:
@@ -112,7 +109,6 @@ class Simulation:
                 else:
                     continue
             runway.occupied = runway.next_available_time > self.time
-
         # 스케줄 상태 갱신 및 완료 처리
         for s in self.schedules:
             if not hasattr(s, 'complete_time'):
@@ -127,7 +123,6 @@ class Simulation:
                 if self.time - s.complete_time >= 3 and s not in self.completed_schedules:
                     self.completed_schedules.append(s)
                     debug(f"스케줄 제거: {s.flight.flight_id}")
-
 
     def _update_schedule_status(self, schedule):
         f = schedule.flight
@@ -151,7 +146,8 @@ class Simulation:
                         schedule.takeoff_time = self.time
                         schedule.atd = self.time  # 실제 이륙 시간 기록
                         # 계획된 활주로 점유
-                        self._occupy_runway(schedule.runway, cooldown=3)
+                        if schedule.runway:
+                            self._occupy_runway(schedule.runway, cooldown=3)
                         # 이륙 지연 손실 계산
                         self._add_delay_loss(schedule, self.time, "takeoff")
             case FlightStatus.TAKE_OFF:
@@ -165,15 +161,18 @@ class Simulation:
                 # 실제 배정된 시간(ETA)에 착륙
                 if not schedule.is_takeoff and schedule.eta is not None and self.time >= schedule.eta:
                     if self._can_land(schedule):
-                        debug(f"{schedule.flight.flight_id} LANDING ON RUNWAY {schedule.runway.get_current_direction()}")
+                        runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
+                        debug(f"{schedule.flight.flight_id} LANDING ON RUNWAY {runway_direction}")
                         schedule.status = FlightStatus.LANDING
                         schedule.landing_time = self.time
                         # 계획된 활주로 점유
-                        self._occupy_runway(schedule.runway, cooldown=3)
+                        if schedule.runway:
+                            self._occupy_runway(schedule.runway, cooldown=3)
             case FlightStatus.LANDING:
                 if self.time - schedule.landing_time >= 1:
                     schedule.status = FlightStatus.TAXI_TO_GATE
-                    debug(f"{schedule.flight.flight_id} TAXIING TO GATE {schedule.runway.get_current_direction()}")
+                    runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
+                    debug(f"{schedule.flight.flight_id} TAXIING TO GATE {runway_direction}")
                     schedule.taxi_to_gate_time = self.time
                     schedule.location = "Gate"
                     schedule.ata = self.time  # 실제 착륙 시간 기록
@@ -238,13 +237,7 @@ class Simulation:
         """활주로 점유"""
         runway.occupied = True
         runway.next_available_time = self.time + 1 + cooldown
-
-    def _update_runway_roles_on_closure(self):
-        """활주로 폐쇄 시 역할 재할당 - 자동으로 처리됨"""
-        # 활주로 폐쇄는 이미 runway.closed로 처리되고 있음
-        # _can_takeoff, _can_land에서 자동으로 사용 가능한 활주로를 찾음
-        pass
-
+        
     def _restore_default_runway_roles(self):
         """기본 활주로 역할로 복구 - 모든 활주로의 inverted = False"""
         for runway in self.airport.runways:
@@ -305,12 +298,12 @@ class Simulation:
         return {
             "flight_id": f.flight_id,
             "status": status_to_str(schedule.status),
-            "ETA": schedule.eta,
-            "ETD": schedule.etd,
+            "ETA": int_to_hhmm_colon(schedule.eta) if schedule.eta is not None else None,
+            "ETD": int_to_hhmm_colon(schedule.etd) if schedule.etd is not None else None,
             "depAirport": f.dep_airport,
             "arrivalAirport": f.arr_airport,
             "airline": f.airline,
-            "runway": schedule.runway.get_current_direction() if hasattr(schedule, 'runway') and schedule.runway else None
+            "runway": schedule.runway.get_current_direction() if (hasattr(schedule, 'runway') and schedule.runway and hasattr(schedule.runway, 'get_current_direction')) else None
         }
 
     def on_event(self, event):
@@ -339,7 +332,7 @@ class Simulation:
             )
 
     def _add_delay_loss(self, schedule, actual_time, operation_type):
-        """지연 손실 계산 및 누적"""
+        """지연 손실 계산 및 누적 (정규화된 priority 기반 weighted sum)"""
         match operation_type:
             case "takeoff":
                 original_time = schedule.flight.etd
@@ -347,30 +340,36 @@ class Simulation:
                     return  # ETD가 없으면 지연 계산 불가
                 delay = actual_time - original_time
                 if delay > 0:
-                    loss = (schedule.priority + 1) * delay
+                    # 정규화된 priority 사용 (0-1 범위)
+                    normalized_priority = schedule.get_normalized_priority()
+                    loss = normalized_priority * delay * 100  # 스케일 조정을 위해 100 곱함
                     self.total_delay_loss += loss
-                    debug(f"이륙 지연 손실: {schedule.flight.flight_id} {delay}분 지연 -> {loss} 손실 추가 (총 {self.total_delay_loss})")
+                    debug(f"이륙 지연 손실: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} (정규화: {normalized_priority:.2f}) -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
             case "landing":
                 original_time = schedule.flight.eta
                 if original_time is None:
                     return  # ETA가 없으면 지연 계산 불가
                 delay = actual_time - original_time
                 if delay > 0:
-                    loss = (schedule.priority + 1) * delay
+                    # 정규화된 priority 사용 (0-1 범위)
+                    normalized_priority = schedule.get_normalized_priority()
+                    loss = normalized_priority * delay * 100  # 스케일 조정을 위해 100 곱함
                     self.total_delay_loss += loss
-                    debug(f"착륙 지연 손실: {schedule.flight.flight_id} {delay}분 지연 -> {loss} 손실 추가 (총 {self.total_delay_loss})")
+                    debug(f"착륙 지연 손실: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} (정규화: {normalized_priority:.2f}) -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
     
     def _add_go_around_loss(self, schedule):
-        """Go-around 손실 계산 및 누적"""
-        loss = (schedule.priority + 1) * 15  # 15분 지연
+        """Go-around 손실 계산 및 누적 (정규화된 priority 기반 weighted sum)"""
+        # 정규화된 priority 사용 (0-1 범위)
+        normalized_priority = schedule.get_normalized_priority()
+        loss = normalized_priority * 15 * 100  # 15분 지연, 스케일 조정을 위해 100 곱함
         self.total_delay_loss += loss
-        debug(f"Go-around 손실: {schedule.flight.flight_id} 15분 지연 -> {loss} 손실 추가 (총 {self.total_delay_loss})")
+        debug(f"Go-around 손실: {schedule.flight.flight_id} 15분 지연, priority {schedule.priority} (정규화: {normalized_priority:.2f}) -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
     
 
     
     def get_total_loss(self):
         """총 손실 반환"""
-        return self.total_delay_loss + self.safety_loss
+        return self.total_delay_loss
 
     def set_speed(self, speed):
         """Change simulation speed (1x, 2x, 4x, 8x)"""

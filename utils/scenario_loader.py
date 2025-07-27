@@ -23,9 +23,17 @@ def load_scenario(path):
             event_data['time'] = hhmm_to_int(event_data['time'])
             debug(f"이벤트 시간 변환: {original_time} -> {event_data['time']}")
     
-    flights = [Flight(**fd) for fd in data.get('flights', [])]
+    # Flight 클래스에서 받을 수 있는 필드만 필터링
+    flight_fields = ['flight_id', 'etd', 'eta', 'dep_airport', 'arr_airport', 'airline']
+    flights = []
+    for fd in data.get('flights', []):
+        filtered_fd = {k: v for k, v in fd.items() if k in flight_fields}
+        flights.append(Flight(**filtered_fd))
     takeoff_flights = [f for f in flights if f.dep_airport == "GMP"]
     landing_flights = [f for f in flights if f.arr_airport == "GMP"]
     schedules = [Schedule(f, is_takeoff=True) for f in takeoff_flights]
+    # Priority 정보 출력
+    for schedule in schedules:
+        debug(f"Schedule created: {schedule.flight.flight_id} (priority {schedule.priority})")
     events = [Event(e['event_type'], e['target_type'], e['target'], e['time'], e['duration']) for e in data.get('events', [])]
     return schedules, landing_flights, events 

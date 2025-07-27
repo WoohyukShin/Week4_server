@@ -1,5 +1,5 @@
 from sim.flight import FlightStatus, Flight
-from sim.schedule import Schedule
+from sim.schedule import Schedule, PRI_MAX
 from utils.logger import debug
 
 class EventHandler:
@@ -38,7 +38,7 @@ class EventHandler:
         emergency_schedule = Schedule(
             flight,
             is_takeoff=False,
-            priority=10,
+            priority=PRI_MAX,
             deadline=current_time + duration
         )
         emergency_schedule.status = FlightStatus.WAITING
@@ -50,7 +50,6 @@ class EventHandler:
             if r.name == runway_name:
                 r.closed = True
                 r.next_available_time = current_time + duration
-        self.sim._update_runway_roles_on_closure()
 
     def _reopen_runway(self, runway_name):
         debug(f"RUNWAY_REOPEN: {runway_name} 재개방")
@@ -58,7 +57,6 @@ class EventHandler:
             if r.name == runway_name:
                 r.closed = False
                 r.next_available_time = self.sim.time
-        self.sim._update_runway_roles_on_closure()
 
     def _cancel_flight(self, flight_id):
         debug(f"FLIGHT_CANCEL: {flight_id} 취소")
@@ -104,6 +102,6 @@ class EventHandler:
         # landing schedule을 queue에 추가
         flight = next((f for f in self.sim.landing_flights if f.flight_id == flight_id), None)
         if flight:
-            landing_schedule = Schedule(flight, is_takeoff=False, priority=0)
+            landing_schedule = Schedule(flight, is_takeoff=False)
             landing_schedule.status = FlightStatus.WAITING
             self.sim.schedules.append(landing_schedule)

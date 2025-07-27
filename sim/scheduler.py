@@ -9,17 +9,17 @@ class Scheduler:
         self.algorithm = algorithm
         self.sim = sim
     
-    def optimize(self, schedules, current_time, event_queue=None):
+    def optimize(self, schedules, current_time, event_queue=None, forecast=None):
         """스케줄 최적화 메인 메서드"""
         match self.algorithm:
             case "greedy":
-                result =  self.greedy(schedules, current_time, event_queue)
+                result =  self.greedy(schedules, current_time, event_queue, forecast)
             case "ml":
-                result =  self.ml(schedules, current_time, event_queue)
+                result =  self.ml(schedules, current_time, event_queue, forecast)
             case "rl":
-                result =  self.rl(schedules, current_time, event_queue)
+                result =  self.rl(schedules, current_time, event_queue, forecast)
             case _:
-                result =  self.greedy(schedules, current_time, event_queue)
+                result =  self.greedy(schedules, current_time, event_queue, forecast)
         
         # 새롭게 재배정된 결과를 출력
         self._debug_schedule_times(schedules, current_time, result)
@@ -44,7 +44,7 @@ class Scheduler:
         debug("===========================")
         return result
     
-    def greedy(self, schedules, current_time, event_queue=None):
+    def greedy(self, schedules, current_time, event_queue=None, forecast=None):
         debug(f"greedy algorithm started at {int_to_hhmm_colon(current_time)}")
         changes = {}
         
@@ -139,12 +139,12 @@ class Scheduler:
         
         return changes
     
-    def ml(self, schedules, current_time):
+    def ml(self, schedules, current_time, event_queue=None, forecast=None):
         """ML 알고리즘 (향후 구현)"""
         # TODO: ML 모델 적용
         return {}
     
-    def rl(self, schedules, current_time):
+    def rl(self, schedules, current_time, event_queue=None, forecast=None):
         """RL 알고리즘 (향후 구현)"""
         # TODO: 강화학습 에이전트 적용
         return {}

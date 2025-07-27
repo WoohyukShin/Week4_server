@@ -34,7 +34,7 @@ class EventHandler:
 
     def _emergency_landing(self, flight_id, duration, current_time):
         debug(f"EMERGENCY_LANDING: {flight_id} {duration}분 내 착륙 필요")
-        flight = Flight(flight_id, etd=None, eta=None, dep_airport=None, arr_airport=None, airline="")
+        flight = Flight(flight_id, etd=None, eta=current_time, dep_airport=None, arr_airport=None, airline="")
         emergency_schedule = Schedule(
             flight,
             is_takeoff=False,
@@ -68,8 +68,11 @@ class EventHandler:
         debug(f"FLIGHT_DELAY: {flight_id} {duration}분 지연")
         for s in self.sim.schedules:
             if s.flight.flight_id == flight_id and s.status == FlightStatus.DORMANT:
-                if s.flight.etd is not None:
-                    s.flight.etd += duration
+                # schedule의 etd를 직접 수정
+                s.etd += duration
+                debug(f"FLIGHT_DELAY: {flight_id} ETD {s.etd - duration} -> {s.etd}")
+                # 지연 시간 기록
+                s.delay_duration = duration
                 s.status = FlightStatus.DELAYED
 
     def _go_around(self, flight_id):

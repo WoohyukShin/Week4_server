@@ -5,8 +5,9 @@ import heapq
 from utils.time_utils import int_to_hhmm_colon
 
 class Scheduler:
-    def __init__(self, algorithm="greedy"):
+    def __init__(self, algorithm="greedy", sim=None):
         self.algorithm = algorithm
+        self.sim = sim
     
     def optimize(self, schedules, current_time, event_queue=None):
         """스케줄 최적화 메인 메서드"""
@@ -83,6 +84,14 @@ class Scheduler:
             if takeoff_time < takeoff_runway_available_time:
                 takeoff_time = takeoff_runway_available_time
             
+            # 활주로 계획 수립
+            for runway in self.sim.airport.runways:
+                if (runway.get_current_direction() in ["14L", "32R"] and 
+                    not runway.closed and 
+                    runway.can_handle_operation(takeoff_time)):
+                    schedule.runway = runway
+                    break
+            
             debug(f"{schedule.flight.flight_id} 조정된 이륙 시간 : {int_to_hhmm_colon(takeoff_time)}")
             # 모든 이륙 스케줄 업데이트
             changes[schedule.flight.flight_id] = takeoff_time
@@ -112,6 +121,14 @@ class Scheduler:
                     if abs(landing_time - takeoff_time) < min_landing_gap:
                         # 착륙 시간을 이륙 시간 + 간격으로 조정
                         landing_time = takeoff_time + min_landing_gap
+            
+            # 활주로 계획 수립
+            for runway in self.sim.airport.runways:
+                if (runway.get_current_direction() in ["14R", "32L"] and 
+                    not runway.closed and 
+                    runway.can_handle_operation(landing_time)):
+                    schedule.runway = runway
+                    break
             
             # 모든 착륙 스케줄 업데이트
             debug(f"{schedule.flight.flight_id} 조정된 착륙 시간 : {int_to_hhmm_colon(landing_time)}")

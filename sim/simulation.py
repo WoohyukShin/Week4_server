@@ -68,8 +68,8 @@ class Simulation:
                     to_remove.append(s)
             for s in to_remove:
                 self.schedules.remove(s)
-            # 종료 조건: schedules가 비었으면 5분 후 종료
-            if not self.schedules:
+            # 종료 조건: schedules & event_queue 가 모두 비었으면 5분 후 종료
+            if not self.schedules and not self.event_queue:
                 if end_time_actual is None:
                     end_time_actual = self.time + end_buffer
                 elif self.time >= end_time_actual:

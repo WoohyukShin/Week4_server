@@ -9,20 +9,20 @@ class Scheduler:
         self.algorithm = algorithm
         self.sim = sim
     
-    def optimize(self, schedules, current_time, event_queue=None, forecast=None):
+    def optimize(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """ event_queue : 관측 가능한 예정된 모든 이벤트 (지금은 RWY_CLOSUIRE, RWY_INVERT만 존재) """
         """ 스케줄 최적화 메인 메서드 """
         match self.algorithm:
             case "greedy":
-                result =  self.greedy(schedules, current_time, event_queue, forecast)
+                result =  self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
             case "advanced":
-                result = self.advanced(schedules, current_time, event_queue, forecast)
+                result = self.advanced(schedules, current_time, event_queue, forecast, runway_availability)
             case "ml":
-                self.ml(schedules, current_time, event_queue, forecast)
+                self.ml(schedules, current_time, event_queue, forecast, runway_availability)
             case "rl":
-                self.rl(schedules, current_time, event_queue, forecast)
+                self.rl(schedules, current_time, event_queue, forecast, runway_availability)
             case _:
-                self.greedy(schedules, current_time, event_queue, forecast)
+                self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
         
         # 새롭게 재배정된 결과를 출력
         self._debug_schedule_times(schedules, current_time)
@@ -46,7 +46,7 @@ class Scheduler:
             debug(f"{flight_id} : {int_to_hhmm_colon(time)}")
         debug("===========================")
     
-    def greedy(self, schedules, current_time, event_queue=None, forecast=None):
+    def greedy(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """시간 기반 그리디 알고리즘"""
         
         # 활주로 폐쇄 정보 추출
@@ -68,10 +68,15 @@ class Scheduler:
         takeoff_schedules.sort(key=lambda s: (-s.priority, s.etd or 0))
         landing_schedules.sort(key=lambda s: (-s.priority, s.eta or 0))
 
-        # 활주로별 사용 가능 시간 추적 (스케줄러 내부 예측용)
+        # 활주로별 사용 가능 시간 추적 (실제 상태 반영)
         runway_available_times = {}
         for runway in self.sim.airport.runways:
-            runway_available_times[runway] = max(current_time, 600)
+            if runway_availability and runway.name in runway_availability:
+                # 실제 활주로의 next_available_time 반영
+                runway_available_times[runway] = max(current_time, runway_availability[runway.name], 600)
+            else:
+                # fallback: 기본값
+                runway_available_times[runway] = max(current_time, 600)
         
         time = max(current_time, 600)
         max_time = 1440  # 24시간 (24 * 60) 제한
@@ -86,16 +91,15 @@ class Scheduler:
                 assigned_runway = None
                 for runway in self.sim.airport.runways:
                     if runway.name == "14L":  # 안쪽 활주로
-                        # 현재 시간에 폐쇄되어 있는지 확인
+                        # 현재 시간에 폐쇄되어 있는지 확인 (event_queue에서)
                         is_closed = False
                         for closure in runway_closures:
                             if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
                                closure['start_time'] <= time <= closure['end_time']:
                                 is_closed = True
                                 break
-                        # 실제 simulation의 next_available_time도 반영
-                        available_time = max(runway_available_times[runway], runway.next_available_time)
-                        if not is_closed and available_time <= time:
+                        # runway_available_times는 이미 실제 상태 반영됨
+                        if not is_closed and runway_available_times[runway] <= time:
                             assigned_runway = runway
                             break
                 
@@ -116,16 +120,15 @@ class Scheduler:
                 assigned_runway = None
                 for runway in self.sim.airport.runways:
                     if runway.name == "14R":  # 바깥쪽 활주로
-                        # 현재 시간에 폐쇄되어 있는지 확인
+                        # 현재 시간에 폐쇄되어 있는지 확인 (event_queue에서)
                         is_closed = False
                         for closure in runway_closures:
                             if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
                                closure['start_time'] <= time <= closure['end_time']:
                                 is_closed = True
                                 break
-                        # 실제 simulation의 next_available_time도 반영
-                        available_time = max(runway_available_times[runway], runway.next_available_time)
-                        if not is_closed and available_time <= time:
+                        # runway_available_times는 이미 실제 상태 반영됨
+                        if not is_closed and runway_available_times[runway] <= time:
                             assigned_runway = runway
                             break
                 
@@ -192,17 +195,17 @@ class Scheduler:
             time = next_time
 
     
-    def ml(self, schedules, current_time, event_queue=None, forecast=None):
+    def ml(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """ML 알고리즘 (향후 구현)"""
         # TODO: ML 모델 적용
         return {}
     
-    def rl(self, schedules, current_time, event_queue=None, forecast=None):
+    def rl(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """RL 알고리즘 (향후 구현)"""
         # TODO: 강화학습 에이전트 적용
         return {}
 
-    def advanced(self, schedules, current_time, event_queue=None, forecast=None):
+    def advanced(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """Advanced scheduler using MILP optimization"""
         debug(f"Advanced scheduler algorithm started at {int_to_hhmm_colon(current_time)}")
         

@@ -35,7 +35,8 @@ class AdvancedScheduler:
         
     def optimize(self, schedules: List[Schedule], current_time: int, 
                 event_queue: Optional[List[Event]] = None, 
-                forecast: Optional[Dict] = None) -> Dict:
+                forecast: Optional[Dict] = None,
+                runway_availability: Optional[Dict] = None) -> Dict:
         """
         Main optimization method - replaces the greedy algorithm
         """
@@ -45,7 +46,7 @@ class AdvancedScheduler:
             return {}
             
         # Preprocess data
-        runway_constraints = self._analyze_runway_constraints(event_queue or [], current_time)
+        runway_constraints = self._analyze_runway_constraints(event_queue or [], current_time, runway_availability)
         weather_risks = self._calculate_weather_risks(forecast or {}, current_time)
         
         # Separate takeoff and landing schedules
@@ -66,22 +67,26 @@ class AdvancedScheduler:
                 debug("MILP optimization failed, using heuristic fallback")
                 optimized_schedule = self._heuristic_optimization(
                     takeoff_schedules, landing_schedules, current_time,
-                    runway_constraints, weather_risks
+                    runway_constraints, weather_risks, runway_availability
                 )
                 
         except Exception as e:
             debug(f"Optimization error: {e}, using heuristic fallback")
             optimized_schedule = self._heuristic_optimization(
                 takeoff_schedules, landing_schedules, current_time,
-                runway_constraints, weather_risks
+                runway_constraints, weather_risks, runway_availability
             )
         
         # Log results
         self._log_optimization_results(optimized_schedule, current_time)
         
+        # Verify separation in results
+        if optimized_schedule:
+            self._verify_separation(optimized_schedule, current_time)
+        
         return optimized_schedule
     
-    def _analyze_runway_constraints(self, event_queue: List[Event], current_time: int) -> Dict:
+    def _analyze_runway_constraints(self, event_queue: List[Event], current_time: int, runway_availability: Optional[Dict]) -> Dict:
         """
         Analyze runway constraints from events
         """
@@ -97,10 +102,16 @@ class AdvancedScheduler:
             constraints['runway_availability'][runway.name] = []
             constraints['runway_availability'][runway.inverted_name] = []
             
-            # Mark current availability for both directions
+            # Mark current availability for both directions using next_available_time
             for t in range(self.time_horizon):
                 time_step = current_time + t
-                available = not runway.closed and runway.next_available_time <= time_step
+                
+                # Use runway_availability if provided, otherwise fall back to runway state
+                if runway_availability and runway.name in runway_availability:
+                    next_available = runway_availability[runway.name]
+                    available = not runway.closed and next_available <= time_step
+                else:
+                    available = not runway.closed and runway.next_available_time <= time_step
                 
                 # Both normal and inverted names get the same availability initially
                 constraints['runway_availability'][runway.name].append(available)
@@ -239,6 +250,20 @@ class AdvancedScheduler:
                 
                 prob += operations_in_window <= 1
         
+        # 2b. Additional separation constraint: No two operations at exactly the same time
+        for t in range(self.time_horizon):
+            for runway in self.sim.airport.runways:
+                runway_direction = runway.get_current_direction()
+                
+                # Count operations on this runway at this exact time
+                operations_at_time = lpSum(
+                    x[i, t] 
+                    for i, schedule in enumerate(all_schedules)
+                    if self._get_assigned_runway(schedule, runway_direction) == runway_direction
+                )
+                
+                prob += operations_at_time <= 1
+        
         # 3. Runway availability constraints
         for i, schedule in enumerate(all_schedules):
             for t in range(self.time_horizon):
@@ -262,6 +287,16 @@ class AdvancedScheduler:
                         if delay_i > delay_j + 10:  # Allow some flexibility
                             prob += x[i, t] <= 0.5  # Soft constraint
         
+        # 5. ETA/ETD constraints (planes cannot land/take off earlier than scheduled)
+        for i, schedule in enumerate(all_schedules):
+            original_time = schedule.etd if schedule.is_takeoff else schedule.eta
+            if original_time is not None:
+                for t in range(self.time_horizon):
+                    proposed_time = current_time + t
+                    if proposed_time < original_time:
+                        # Cannot assign to time earlier than ETA/ETD
+                        prob += x[i, t] == 0
+        
         # Solve the problem
         prob.solve(PULP_CBC_CMD(msg=0, timeLimit=self.max_optimization_time))
         
@@ -280,7 +315,8 @@ class AdvancedScheduler:
     
     def _heuristic_optimization(self, takeoff_schedules: List[Schedule], 
                                landing_schedules: List[Schedule], current_time: int,
-                               runway_constraints: Dict, weather_risks: Dict) -> Dict:
+                               runway_constraints: Dict, weather_risks: Dict,
+                               runway_availability: Optional[Dict] = None) -> Dict:
         """
         Heuristic fallback optimization based on PALS algorithm
         """
@@ -290,10 +326,17 @@ class AdvancedScheduler:
         takeoff_schedules.sort(key=lambda s: (-s.priority, s.etd))
         landing_schedules.sort(key=lambda s: (-s.priority, s.eta))
         
-        # Track runway usage
+        # Track runway usage with proper separation
         runway_usage = {
             '14L': 0, '14R': 0, '32L': 0, '32R': 0
         }
+        
+        # Initialize runway usage with actual next_available_time if provided
+        if runway_availability:
+            for runway in self.sim.airport.runways:
+                if runway.name in runway_availability:
+                    runway_usage[runway.name] = max(runway_usage[runway.name], runway_availability[runway.name])
+                    runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], runway_availability[runway.name])
         
         # Process takeoff schedules
         for schedule in takeoff_schedules:
@@ -302,7 +345,9 @@ class AdvancedScheduler:
             )
             if assigned_time is not None:
                 solution[schedule.flight.flight_id] = assigned_time
-                runway_usage[self._get_assigned_runway(schedule, None)] = assigned_time + self.min_separation
+                assigned_runway = self._get_assigned_runway(schedule, None)
+                # Ensure 4-minute separation
+                runway_usage[assigned_runway] = assigned_time + self.min_separation
         
         # Process landing schedules
         for schedule in landing_schedules:
@@ -311,7 +356,9 @@ class AdvancedScheduler:
             )
             if assigned_time is not None:
                 solution[schedule.flight.flight_id] = assigned_time
-                runway_usage[self._get_assigned_runway(schedule, None)] = assigned_time + self.min_separation
+                assigned_runway = self._get_assigned_runway(schedule, None)
+                # Ensure 4-minute separation
+                runway_usage[assigned_runway] = assigned_time + self.min_separation
         
         return solution
     
@@ -321,22 +368,26 @@ class AdvancedScheduler:
         """
         Assign takeoff time for a schedule
         """
-        original_time = max(current_time, schedule.etd)
+        original_time = max(current_time, schedule.etd)  # Cannot take off earlier than ETD
         assigned_runway = self._get_assigned_runway(schedule, None)
         
         # Find earliest available time considering constraints
         for t in range(self.time_horizon):
             proposed_time = current_time + t
             
-            # Check runway availability
+            # Constraint 1: Cannot take off earlier than ETD
+            if proposed_time < schedule.etd:
+                continue
+                
+            # Constraint 2: Runway availability (must be after next_available_time)
             if proposed_time < runway_usage.get(assigned_runway, 0):
                 continue
                 
-            # Check runway closure constraints
+            # Constraint 3: Runway closure constraints
             if not self._is_runway_available(assigned_runway, proposed_time, runway_constraints):
                 continue
                 
-            # Check weather risk
+            # Constraint 4: Weather risk
             if weather_risks[t]['takeoff_risk'] > self.high_risk_threshold:
                 continue  # Skip high-risk time slots
                 
@@ -350,22 +401,26 @@ class AdvancedScheduler:
         """
         Assign landing time for a schedule
         """
-        original_time = max(current_time, schedule.eta)
+        original_time = max(current_time, schedule.eta)  # Cannot land earlier than ETA
         assigned_runway = self._get_assigned_runway(schedule, None)
         
         # Find earliest available time considering constraints
         for t in range(self.time_horizon):
             proposed_time = current_time + t
             
-            # Check runway availability
+            # Constraint 1: Cannot land earlier than ETA
+            if proposed_time < schedule.eta:
+                continue
+                
+            # Constraint 2: Runway availability (must be after next_available_time)
             if proposed_time < runway_usage.get(assigned_runway, 0):
                 continue
                 
-            # Check runway closure constraints
+            # Constraint 3: Runway closure constraints
             if not self._is_runway_available(assigned_runway, proposed_time, runway_constraints):
                 continue
                 
-            # Check weather risk
+            # Constraint 4: Weather risk
             if weather_risks[t]['landing_risk'] > self.high_risk_threshold:
                 continue  # Skip high-risk time slots
                 
@@ -407,12 +462,22 @@ class AdvancedScheduler:
         """
         Check if runway is available at given time
         """
+        # First check if runway exists in constraints
         if runway_direction not in runway_constraints['runway_availability']:
             return True
             
+        # Check constraints-based availability
         time_index = time - self.sim.time
         if 0 <= time_index < len(runway_constraints['runway_availability'][runway_direction]):
-            return runway_constraints['runway_availability'][runway_direction][time_index]
+            if not runway_constraints['runway_availability'][runway_direction][time_index]:
+                return False
+        
+        # Also check actual runway state using can_handle_operation
+        for runway in self.sim.airport.runways:
+            if (runway.get_current_direction() == runway_direction or 
+                runway.name == runway_direction or 
+                runway.inverted_name == runway_direction):
+                return runway.can_handle_operation(time)
         
         return True
     
@@ -424,6 +489,38 @@ class AdvancedScheduler:
         for flight_id, assigned_time in solution.items():
             debug(f"{flight_id}: {int_to_hhmm_colon(assigned_time)}")
         debug("=====================================")
+    
+    def _verify_separation(self, solution: Dict, current_time: int):
+        """Verify that proper separation is maintained in the solution"""
+        debug("===== VERIFYING SEPARATION =====")
+        
+        # Group operations by runway
+        runway_operations = {'14L': [], '14R': [], '32L': [], '32R': []}
+        
+        for flight_id, assigned_time in solution.items():
+            # Find the schedule for this flight
+            schedule = None
+            for s in self.sim.schedules:
+                if s.flight.flight_id == flight_id:
+                    schedule = s
+                    break
+            
+            if schedule:
+                assigned_runway = self._get_assigned_runway(schedule, None)
+                runway_operations[assigned_runway].append((flight_id, assigned_time))
+        
+        # Check separation for each runway
+        for runway, operations in runway_operations.items():
+            if len(operations) > 1:
+                operations.sort(key=lambda x: x[1])  # Sort by time
+                for i in range(len(operations) - 1):
+                    time_diff = operations[i+1][1] - operations[i][1]
+                    if time_diff < self.min_separation:
+                        debug(f"⚠️  SEPARATION VIOLATION: {operations[i][0]} and {operations[i+1][0]} on {runway} only {time_diff} minutes apart!")
+                    else:
+                        debug(f"✅ Separation OK: {operations[i][0]} and {operations[i+1][0]} on {runway} {time_diff} minutes apart")
+        
+        debug("================================")
     
     def adaptive_schedule_update(self, current_schedules: List[Schedule], 
                                new_events: List[Event], weather_update: Dict) -> Dict:

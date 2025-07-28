@@ -24,6 +24,17 @@ class Scheduler:
             case _:
                 self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
         
+        # Apply optimized times to schedules
+        if result:
+            for schedule in schedules:
+                if schedule.flight.flight_id in result:
+                    optimized_time = result[schedule.flight.flight_id]
+                    if schedule.is_takeoff:
+                        schedule.etd = optimized_time
+                    else:
+                        schedule.eta = optimized_time
+                    debug(f"Applied optimized time: {schedule.flight.flight_id} -> {int_to_hhmm_colon(optimized_time)}")
+        
         # 새롭게 재배정된 결과를 출력
         self._debug_schedule_times(schedules, current_time)
         debug("=====NEW SCHEDULER RESULT=====")
@@ -216,27 +227,45 @@ class Scheduler:
         advanced_scheduler = AdvancedScheduler(self.sim)
         
         # Run the advanced optimization
-        result = advanced_scheduler.optimize(schedules, current_time, event_queue, forecast)
+        result = advanced_scheduler.optimize(schedules, current_time, event_queue, forecast, runway_availability)
+        
+        # Track runway usage to ensure separation
+        runway_usage = {'14L': 0, '14R': 0, '32L': 0, '32R': 0}
+        
+        # Initialize runway usage with actual next_available_time if provided
+        if runway_availability:
+            for runway in self.sim.airport.runways:
+                if runway.name in runway_availability:
+                    runway_usage[runway.name] = max(runway_usage[runway.name], runway_availability[runway.name])
+                    runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], runway_availability[runway.name])
         
         # Assign runways to schedules based on the result
         # This is needed because the advanced scheduler returns times but doesn't assign runways
         for schedule in schedules:
             if schedule.flight.flight_id in result:
-                # Assign appropriate runway based on operation type
+                assigned_time = result[schedule.flight.flight_id]
+                
+                # Assign appropriate runway based on operation type and availability
                 if schedule.is_takeoff:
-                    # Find takeoff runway (14L or 32R)
+                    # Find takeoff runway (14L or 32R) that can handle the operation
                     for runway in self.sim.airport.runways:
                         current_direction = runway.get_current_direction()
-                        if current_direction in ["14L", "32R"] and not runway.closed:
-                            schedule.runway = runway
-                            break
+                        if current_direction in ["14L", "32R"] and runway.can_handle_operation(assigned_time):
+                            # Check if runway is available at this time (respect separation)
+                            if assigned_time >= runway_usage[current_direction]:
+                                schedule.runway = runway
+                                runway_usage[current_direction] = assigned_time + 4  # 4-minute separation
+                                break
                 else:
-                    # Find landing runway (14R or 32L)
+                    # Find landing runway (14R or 32L) that can handle the operation
                     for runway in self.sim.airport.runways:
                         current_direction = runway.get_current_direction()
-                        if current_direction in ["14R", "32L"] and not runway.closed:
-                            schedule.runway = runway
-                            break
+                        if current_direction in ["14R", "32L"] and runway.can_handle_operation(assigned_time):
+                            # Check if runway is available at this time (respect separation)
+                            if assigned_time >= runway_usage[current_direction]:
+                                schedule.runway = runway
+                                runway_usage[current_direction] = assigned_time + 4  # 4-minute separation
+                                break
         
         return result
 

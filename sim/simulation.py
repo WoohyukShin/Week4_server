@@ -404,7 +404,9 @@ class Simulation:
         
         # Ensure runway is assigned for all flight states
         runway_direction = None
-        if hasattr(schedule, 'runway') and schedule.runway and hasattr(schedule.runway, 'get_current_direction'):
+        if hasattr(schedule, 'opposite_runway_direction'):
+            runway_direction = schedule.opposite_runway_direction
+        elif hasattr(schedule, 'runway') and schedule.runway and hasattr(schedule.runway, 'get_current_direction'):
             runway_direction = schedule.runway.get_current_direction()
         else:
             # Fallback: assign runway based on operation type and status

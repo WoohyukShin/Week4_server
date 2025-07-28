@@ -14,7 +14,7 @@ class Scheduler:
         """ 스케줄 최적화 메인 메서드 """
         match self.algorithm:
             case "greedy":
-                result =  self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
+                result = self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
             case "advanced":
                 result = self.advanced(schedules, current_time, event_queue, forecast, runway_availability)
             case "ml":
@@ -87,8 +87,15 @@ class Scheduler:
         if runway_availability:
             for runway in self.sim.airport.runways:
                 if runway.name in runway_availability:
-                    runway_usage[runway.name] = max(runway_usage[runway.name], runway_availability[runway.name])
-                    runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], runway_availability[runway.name])
+                    next_available = runway_availability[runway.name]
+                    runway_usage[runway.name] = max(runway_usage[runway.name], next_available)
+                    runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], next_available)
+                    debug(f"Runway {runway.name} next_available_time: {next_available} -> runway_usage[{runway.name}]: {runway_usage[runway.name]}")
+        else:
+            # runway_availability가 없으면 current_time으로 초기화
+            for runway in self.sim.airport.runways:
+                runway_usage[runway.name] = max(runway_usage[runway.name], current_time)
+                runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], current_time)
         
         # Process takeoff schedules
         for schedule in takeoff_schedules:

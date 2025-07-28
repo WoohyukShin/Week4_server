@@ -80,131 +80,103 @@ class Scheduler:
         landing_schedules.sort(key=lambda s: (-s.priority, s.eta or 0))
 
         # 활주로별 사용 가능 시간 추적 (실제 상태 반영)
-        runway_available_times = {}
-        for runway in self.sim.airport.runways:
-            if runway_availability and runway.name in runway_availability:
-                # 실제 활주로의 next_available_time 반영
-                runway_available_times[runway] = max(current_time, runway_availability[runway.name], 600)
-            else:
-                # fallback: 기본값
-                runway_available_times[runway] = max(current_time, 600)
+        # Track by runway direction to ensure proper separation
+        runway_usage = {'14L': 0, '14R': 0, '32L': 0, '32R': 0}
         
-        time = max(current_time, 600)
-        max_time = 1440  # 24시간 (24 * 60) 제한
-
-        while time <= max_time:
+        # Initialize with actual next_available_time if provided
+        if runway_availability:
+            for runway in self.sim.airport.runways:
+                if runway.name in runway_availability:
+                    runway_usage[runway.name] = max(runway_usage[runway.name], runway_availability[runway.name])
+                    runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], runway_availability[runway.name])
+        
+        # Process takeoff schedules
+        for schedule in takeoff_schedules:
+            # Find earliest available time for takeoff
+            earliest_time = max(current_time, schedule.etd or current_time)
             
-            for schedule in takeoff_schedules:
-                if schedule.flight.etd is None or schedule.flight.etd > time:
-                    continue
-                
-                # 이륙 가능한 활주로 찾기 (14L 활주로만)
-                assigned_runway = None
-                for runway in self.sim.airport.runways:
-                    if runway.name == "14L":  # 안쪽 활주로
-                        # 현재 시간에 폐쇄되어 있는지 확인 (event_queue에서)
-                        is_closed = False
-                        for closure in runway_closures:
-                            if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
-                               closure['start_time'] <= time <= closure['end_time']:
-                                is_closed = True
-                                break
-                        # runway_available_times는 이미 실제 상태 반영됨
-                        if not is_closed and runway_available_times[runway] <= time:
-                            assigned_runway = runway
+            # Try to find available runway (14L/32R for takeoff)
+            assigned_runway = None
+            assigned_time = None
+            
+            for runway in self.sim.airport.runways:
+                current_direction = runway.get_current_direction()
+                if current_direction in ["14L", "32R"]:  # Takeoff runways
+                    # Check if runway is closed
+                    is_closed = False
+                    for closure in runway_closures:
+                        if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
+                           closure['start_time'] <= earliest_time <= closure['end_time']:
+                            is_closed = True
                             break
-                
-                if assigned_runway:
-                    schedule.runway = assigned_runway
-                    schedule.etd = time  # 즉시 ETD 수정
-                    runway_available_times[assigned_runway] = time + 4  # 이륙 1분 + 쿨다운 3분
-                    debug(f"{schedule.flight.flight_id} 이륙: {int_to_hhmm_colon(time)} 활주로 {assigned_runway.get_current_direction()}")
-                    takeoff_schedules.remove(schedule)
-                    break  # 이 시간에는 하나만 처리
-            
-            # 현재 시간에 착륙할 수 있는 비행기 찾기
-            for schedule in landing_schedules:
-                if schedule.flight.eta != time:
-                    continue
-                
-                # 착륙 가능한 활주로 찾기 (14R 활주로만)
-                assigned_runway = None
-                for runway in self.sim.airport.runways:
-                    if runway.name == "14R":  # 바깥쪽 활주로
-                        # 현재 시간에 폐쇄되어 있는지 확인 (event_queue에서)
-                        is_closed = False
-                        for closure in runway_closures:
-                            if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
-                               closure['start_time'] <= time <= closure['end_time']:
-                                is_closed = True
-                                break
-                        # runway_available_times는 이미 실제 상태 반영됨
-                        if not is_closed and runway_available_times[runway] <= time:
+                    
+                    if not is_closed:
+                        # Check if runway is available at this time (respect separation)
+                        available_time = max(earliest_time, runway_usage[current_direction])
+                        
+                        # Check if runway can handle operation
+                        if runway.can_handle_operation(available_time):
                             assigned_runway = runway
+                            assigned_time = available_time
                             break
-                
-                if assigned_runway:
-                    schedule.runway = assigned_runway
-                    runway_available_times[assigned_runway] = time + 4  # 착륙 1분 + 쿨다운 3분
-                    debug(f"{schedule.flight.flight_id} 착륙: {int_to_hhmm_colon(time)} 활주로 {assigned_runway.get_current_direction()}")
-                    landing_schedules.remove(schedule)
-                    break  # 이 시간에는 하나만 처리
-                else:
-                    # 착륙 실패 - go-around 발생
-                    self.sim.event_handler._go_around(schedule.flight.flight_id)
-                    debug(f"{schedule.flight.flight_id} 착륙 실패: {int_to_hhmm_colon(time)} - go-around 발생")
-                    landing_schedules.remove(schedule)
-                    break  # 이 시간에는 하나만 처리
             
-            # 모든 스케줄이 배정되었는지 확인
-            all_assigned = True
-            unassigned_count = 0
-            for schedule in takeoff_schedules + landing_schedules:
-                # 이륙 스케줄: ETD가 있고 현재 시간보다 빠르거나 같으면 배정되어야 함
-                if schedule.is_takeoff and schedule.etd is not None and schedule.etd <= time and schedule.runway is None:
-                    all_assigned = False
-                    unassigned_count += 1
-                # 착륙 스케줄: ETA가 있고 현재 시간보다 빠르거나 같으면 배정되어야 함
-                elif not schedule.is_takeoff and schedule.eta is not None and schedule.eta <= time and schedule.runway is None:
-                    all_assigned = False
-                    unassigned_count += 1
+            if assigned_runway and assigned_time:
+                schedule.runway = assigned_runway
+                schedule.etd = assigned_time
+                # Update runway usage with 4-minute separation
+                runway_usage[assigned_runway.get_current_direction()] = assigned_time + 4
+                debug(f"{schedule.flight.flight_id} 이륙: {int_to_hhmm_colon(assigned_time)} 활주로 {assigned_runway.get_current_direction()}")
+        
+        # Process landing schedules
+        for schedule in landing_schedules:
+            # Find earliest available time for landing
+            earliest_time = max(current_time, schedule.eta or current_time)
             
-            if all_assigned:
-                break
+            # Try to find available runway (14R/32L for landing)
+            assigned_runway = None
+            assigned_time = None
             
-            # 다음 시간 계산 (가장 가까운 이벤트 시간으로 건너뛰기)
-            next_time = time + 1  # 기본값: 1분 후
+            for runway in self.sim.airport.runways:
+                current_direction = runway.get_current_direction()
+                if current_direction in ["14R", "32L"]:  # Landing runways
+                    # Check if runway is closed
+                    is_closed = False
+                    for closure in runway_closures:
+                        if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
+                           closure['start_time'] <= earliest_time <= closure['end_time']:
+                            is_closed = True
+                            break
+                    
+                    if not is_closed:
+                        # Check if runway is available at this time (respect separation)
+                        available_time = max(earliest_time, runway_usage[current_direction])
+                        
+                        # Check if runway can handle operation
+                        if runway.can_handle_operation(available_time):
+                            assigned_runway = runway
+                            assigned_time = available_time
+                            break
             
-            # 1. 다음 이륙 가능 시간들 중 최솟값
-            next_takeoff_times = []
-            for schedule in takeoff_schedules:
-                if schedule.runway is None and schedule.flight.etd is not None and schedule.flight.etd > time:
-                    next_takeoff_times.append(schedule.flight.etd)
-            
-            # 2. 다음 착륙 시간들 중 최솟값
-            next_landing_times = []
-            for schedule in landing_schedules:
-                if schedule.runway is None and schedule.flight.eta is not None and schedule.flight.eta > time:
-                    next_landing_times.append(schedule.flight.eta)
-            
-            # 3. 다음 활주로 사용 가능 시간들 중 최솟값
-            next_runway_times = [t for t in runway_available_times.values() if t > time]
-            
-            # 4. 다음 폐쇄 시작/종료 시간들
-            next_closure_times = []
-            for closure in runway_closures:
-                if closure['start_time'] > time:
-                    next_closure_times.append(closure['start_time'])
-                if closure['end_time'] > time:
-                    next_closure_times.append(closure['end_time'])
-            
-            # 모든 가능한 다음 시간들 중 최솟값
-            all_next_times = next_takeoff_times + next_landing_times + next_runway_times + next_closure_times
-            if all_next_times:
-                next_time = min(all_next_times)
-            
-            time = next_time
-
+            if assigned_runway and assigned_time:
+                schedule.runway = assigned_runway
+                schedule.eta = assigned_time
+                # Update runway usage with 4-minute separation
+                runway_usage[assigned_runway.get_current_direction()] = assigned_time + 4
+                debug(f"{schedule.flight.flight_id} 착륙: {int_to_hhmm_colon(assigned_time)} 활주로 {assigned_runway.get_current_direction()}")
+            else:
+                # Landing failed - go-around
+                self.sim.event_handler._go_around(schedule.flight.flight_id)
+                debug(f"{schedule.flight.flight_id} 착륙 실패: {int_to_hhmm_colon(earliest_time)} - go-around 발생")
+        
+        # Return result for consistency with other algorithms
+        result = {}
+        for schedule in takeoff_schedules + landing_schedules:
+            if schedule.is_takeoff and schedule.etd is not None:
+                result[schedule.flight.flight_id] = schedule.etd
+            elif not schedule.is_takeoff and schedule.eta is not None:
+                result[schedule.flight.flight_id] = schedule.eta
+        
+        return result
     
     def ml(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """ML 알고리즘 (향후 구현)"""

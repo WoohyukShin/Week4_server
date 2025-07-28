@@ -66,24 +66,15 @@ class Scheduler:
         takeoff_schedules.sort(key=lambda s: (-s.priority, s.etd or 0))
         landing_schedules.sort(key=lambda s: (-s.priority, s.eta or 0))
 
+        # 활주로별 사용 가능 시간 추적 (스케줄러 내부 예측용)
         runway_available_times = {}
         for runway in self.sim.airport.runways:
-            # 실제 활주로의 현재 상태를 반영
-            if runway.closed:
-                runway_available_times[runway] = max(current_time, runway.next_available_time)
-            else:
-                runway_available_times[runway] = max(current_time, 600)
+            runway_available_times[runway] = max(current_time, 600)
         
         time = max(current_time, 600)
         max_time = 1440  # 24시간 (24 * 60) 제한
 
         while time <= max_time:
-            for closure in runway_closures:
-                if closure['start_time'] <= time <= closure['end_time']:
-                    # 해당 활주로를 찾아서 사용 가능 시간을 폐쇄 종료 시간으로 설정
-                    for runway in self.sim.airport.runways:
-                        if runway.name == closure['runway'] or runway.inverted_name == closure['runway']:
-                            runway_available_times[runway] = max(runway_available_times[runway], closure['end_time'])
             
             for schedule in takeoff_schedules:
                 if schedule.flight.etd is None or schedule.flight.etd > time:
@@ -93,7 +84,16 @@ class Scheduler:
                 assigned_runway = None
                 for runway in self.sim.airport.runways:
                     if runway.name == "14L":  # 안쪽 활주로
-                        if runway_available_times[runway] <= time:
+                        # 현재 시간에 폐쇄되어 있는지 확인
+                        is_closed = False
+                        for closure in runway_closures:
+                            if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
+                               closure['start_time'] <= time <= closure['end_time']:
+                                is_closed = True
+                                break
+                        # 실제 simulation의 next_available_time도 반영
+                        available_time = max(runway_available_times[runway], runway.next_available_time)
+                        if not is_closed and available_time <= time:
                             assigned_runway = runway
                             break
                 
@@ -114,7 +114,16 @@ class Scheduler:
                 assigned_runway = None
                 for runway in self.sim.airport.runways:
                     if runway.name == "14R":  # 바깥쪽 활주로
-                        if runway_available_times[runway] <= time:
+                        # 현재 시간에 폐쇄되어 있는지 확인
+                        is_closed = False
+                        for closure in runway_closures:
+                            if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
+                               closure['start_time'] <= time <= closure['end_time']:
+                                is_closed = True
+                                break
+                        # 실제 simulation의 next_available_time도 반영
+                        available_time = max(runway_available_times[runway], runway.next_available_time)
+                        if not is_closed and available_time <= time:
                             assigned_runway = runway
                             break
                 

@@ -32,7 +32,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("greedy", self)
+        self.scheduler = Scheduler("advanced", self)  # Use advanced algorithm in scheduler
         
         # Speed control
         self.speed = 1  # 1x, 2x, 4x, 8x, 64x

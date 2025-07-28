@@ -14,7 +14,9 @@ class Scheduler:
         """ 스케줄 최적화 메인 메서드 """
         match self.algorithm:
             case "greedy":
-                self.greedy(schedules, current_time, event_queue, forecast)
+                result =  self.greedy(schedules, current_time, event_queue, forecast)
+            case "advanced":
+                result = self.advanced(schedules, current_time, event_queue, forecast)
             case "ml":
                 self.ml(schedules, current_time, event_queue, forecast)
             case "rl":
@@ -200,8 +202,43 @@ class Scheduler:
         # TODO: 강화학습 에이전트 적용
         return {}
 
-    def _debug_schedule_times(self, schedules, current_time):
-        """모든 스케줄의 배정된 시간을 순서대로 출력"""
+    def advanced(self, schedules, current_time, event_queue=None, forecast=None):
+        """Advanced scheduler using MILP optimization"""
+        debug(f"Advanced scheduler algorithm started at {int_to_hhmm_colon(current_time)}")
+        
+        # Import AdvancedScheduler here to avoid circular imports
+        from sim.advanced_scheduler import AdvancedScheduler
+        
+        # Create a temporary advanced scheduler instance
+        advanced_scheduler = AdvancedScheduler(self.sim)
+        
+        # Run the advanced optimization
+        result = advanced_scheduler.optimize(schedules, current_time, event_queue, forecast)
+        
+        # Assign runways to schedules based on the result
+        # This is needed because the advanced scheduler returns times but doesn't assign runways
+        for schedule in schedules:
+            if schedule.flight.flight_id in result:
+                # Assign appropriate runway based on operation type
+                if schedule.is_takeoff:
+                    # Find takeoff runway (14L or 32R)
+                    for runway in self.sim.airport.runways:
+                        current_direction = runway.get_current_direction()
+                        if current_direction in ["14L", "32R"] and not runway.closed:
+                            schedule.runway = runway
+                            break
+                else:
+                    # Find landing runway (14R or 32L)
+                    for runway in self.sim.airport.runways:
+                        current_direction = runway.get_current_direction()
+                        if current_direction in ["14R", "32L"] and not runway.closed:
+                            schedule.runway = runway
+                            break
+        
+        return result
+
+    def _debug_schedule_times(self, schedules, current_time, changes=None):
+        """모든 스케줄의 배정된 시간을 순서대로 출력 (변경사항 반영)"""
         schedule_times = []
         
         debug(f"현재 시간: {int_to_hhmm_colon(current_time)}, 총 스케줄 수: {len(schedules)}")

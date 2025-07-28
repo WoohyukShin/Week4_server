@@ -10,6 +10,8 @@ import os
 # Add the current directory to Python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+from utils.time_utils import int_to_hhmm_colon
+
 def test_dependencies():
     """Test if all required dependencies are installed"""
     print("Testing dependencies...")
@@ -354,7 +356,7 @@ def test_eta_etd_constraints():
         sim.update_status()
         
         # Run optimization
-        result = sim.scheduler.optimize([schedule1], 1150, [], {})
+        result = sim.scheduler.optimize([schedule1], 1150, [], {}, {})
         
         # Verify that takeoff time is not earlier than ETD (1200)
         if schedule1.etd is not None:
@@ -375,7 +377,7 @@ def test_eta_etd_constraints():
         schedule2.runway = runway2
         
         # Run optimization for landing
-        result = sim.scheduler.optimize([schedule2], 1298, [], {})
+        result = sim.scheduler.optimize([schedule2], 1298, [], {}, {})
         
         # Verify that landing time is not earlier than ETA (1300)
         if schedule2.eta is not None:
@@ -508,7 +510,7 @@ def test_separation_constraints():
         
         # Run optimization
         sim.time = 1150
-        result = sim.scheduler.optimize([schedule1, schedule2], 1150, [], {})
+        result = sim.scheduler.optimize([schedule1, schedule2], 1150, [], {}, {})
         
         # Verify that flights are assigned different times
         if schedule1.etd is not None and schedule2.etd is not None:
@@ -560,7 +562,7 @@ def test_scheduler_applies_optimized_times():
         
         # Run optimization
         sim.time = 1150
-        sim.scheduler.optimize([schedule1, schedule2], 1150, [], {})
+        sim.scheduler.optimize([schedule1, schedule2], 1150, [], {}, {})
         
         # Verify that ETD values were updated by the scheduler
         if schedule1.etd != 1200 or schedule2.etd != 1200:
@@ -579,6 +581,71 @@ def test_scheduler_applies_optimized_times():
         
     except Exception as e:
         print(f"❌ Scheduler applies optimized times test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_advanced_scheduler_with_runway_availability():
+    """Test that the advanced scheduler works with runway_availability parameter"""
+    print("\nTesting advanced scheduler with runway_availability...")
+    
+    try:
+        from sim.scheduler import Scheduler
+        from sim.schedule import Schedule
+        from sim.flight import Flight, FlightStatus
+        from sim.airport import Airport, Runway
+        from sim.simulation import Simulation, SimulationMode
+        
+        # Create flights
+        flight1 = Flight("TEST1", 1200, None, "CDG", "GMP", "Korean Air", 32)  # ETD 12:00
+        flight2 = Flight("TEST2", 1200, None, "HKT", "GMP", "Korean Air", 64)  # ETD 12:00 (same time!)
+        
+        runway1 = Runway("14L", "32R")
+        runway2 = Runway("14R", "32L")
+        airport = Airport("GMP", "Gimpo", [runway1, runway2], [])
+        
+        # Set runway availability
+        runway1.next_available_time = 1200  # Available at 12:00
+        runway2.next_available_time = 1205  # Available at 12:05
+        
+        schedule1 = Schedule(flight1, is_takeoff=True, priority=32)
+        schedule2 = Schedule(flight2, is_takeoff=True, priority=64)
+        
+        # Create simulation with advanced scheduler
+        sim = Simulation(airport, [schedule1, schedule2], [], mode=SimulationMode.HEADLESS)
+        
+        # Verify we're using advanced scheduler
+        assert sim.scheduler.algorithm == "advanced", f"Should use advanced scheduler, got {sim.scheduler.algorithm}"
+        
+        # Run optimization with runway availability
+        sim.time = 1150
+        runway_availability = {
+            '14L': runway1.next_available_time,
+            '14R': runway2.next_available_time
+        }
+        
+        result = sim.scheduler.optimize([schedule1, schedule2], 1150, [], {}, runway_availability)
+        
+        # Verify that optimization worked
+        if result:
+            print(f"  ✅ Advanced scheduler returned {len(result)} optimized times")
+            
+            # Verify separation
+            if schedule1.etd is not None and schedule2.etd is not None:
+                time_diff = abs(schedule1.etd - schedule2.etd)
+                assert time_diff >= 4, f"Flights should have at least 4 minutes separation, got {time_diff}"
+                print(f"  ✅ Separation verified: {time_diff} minutes apart")
+                
+                print(f"  ✅ {schedule1.flight.flight_id}: ETD {schedule1.etd} ({int_to_hhmm_colon(schedule1.etd)})")
+                print(f"  ✅ {schedule2.flight.flight_id}: ETD {schedule2.etd} ({int_to_hhmm_colon(schedule2.etd)})")
+        else:
+            print("  ⚠️  Advanced scheduler returned no results")
+        
+        print("✅ Advanced scheduler works with runway_availability")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Advanced scheduler with runway_availability test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -642,6 +709,11 @@ def main():
     # Test scheduler applies optimized times
     if not test_scheduler_applies_optimized_times():
         print("\n❌ Scheduler applies optimized times test failed.")
+        return False
+    
+    # Test advanced scheduler with runway_availability
+    if not test_advanced_scheduler_with_runway_availability():
+        print("\n❌ Advanced scheduler with runway_availability test failed.")
         return False
     
     print("\n🎉 All tests passed! Advanced Scheduler is ready to use.")

@@ -9,20 +9,20 @@ class Scheduler:
         self.algorithm = algorithm
         self.sim = sim
     
-    def optimize(self, schedules, current_time, event_queue=None, forecast=None):
+    def optimize(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """ event_queue : 관측 가능한 예정된 모든 이벤트 (지금은 RWY_CLOSUIRE, RWY_INVERT만 존재) """
         """ 스케줄 최적화 메인 메서드 """
         match self.algorithm:
             case "greedy":
-                result =  self.greedy(schedules, current_time, event_queue, forecast)
+                result =  self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
             case "advanced":
-                result = self.advanced(schedules, current_time, event_queue, forecast)
+                result = self.advanced(schedules, current_time, event_queue, forecast, runway_availability)
             case "ml":
-                self.ml(schedules, current_time, event_queue, forecast)
+                self.ml(schedules, current_time, event_queue, forecast, runway_availability)
             case "rl":
-                self.rl(schedules, current_time, event_queue, forecast)
+                self.rl(schedules, current_time, event_queue, forecast, runway_availability)
             case _:
-                self.greedy(schedules, current_time, event_queue, forecast)
+                self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
         
         # Apply optimized times to schedules
         if result:
@@ -57,7 +57,7 @@ class Scheduler:
             debug(f"{flight_id} : {int_to_hhmm_colon(time)}")
         debug("===========================")
     
-    def greedy(self, schedules, current_time, event_queue=None, forecast=None):
+    def greedy(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """시간 기반 그리디 알고리즘"""
         
         # 활주로 폐쇄 정보 추출
@@ -79,24 +79,20 @@ class Scheduler:
         takeoff_schedules.sort(key=lambda s: (-s.priority, s.etd or 0))
         landing_schedules.sort(key=lambda s: (-s.priority, s.eta or 0))
 
+        # 활주로별 사용 가능 시간 추적 (실제 상태 반영)
         runway_available_times = {}
         for runway in self.sim.airport.runways:
-            # 실제 활주로의 현재 상태를 반영
-            if runway.closed:
-                runway_available_times[runway] = max(current_time, runway.next_available_time)
+            if runway_availability and runway.name in runway_availability:
+                # 실제 활주로의 next_available_time 반영
+                runway_available_times[runway] = max(current_time, runway_availability[runway.name], 600)
             else:
+                # fallback: 기본값
                 runway_available_times[runway] = max(current_time, 600)
         
         time = max(current_time, 600)
         max_time = 1440  # 24시간 (24 * 60) 제한
 
         while time <= max_time:
-            for closure in runway_closures:
-                if closure['start_time'] <= time <= closure['end_time']:
-                    # 해당 활주로를 찾아서 사용 가능 시간을 폐쇄 종료 시간으로 설정
-                    for runway in self.sim.airport.runways:
-                        if runway.name == closure['runway'] or runway.inverted_name == closure['runway']:
-                            runway_available_times[runway] = max(runway_available_times[runway], closure['end_time'])
             
             for schedule in takeoff_schedules:
                 if schedule.flight.etd is None or schedule.flight.etd > time:
@@ -106,7 +102,15 @@ class Scheduler:
                 assigned_runway = None
                 for runway in self.sim.airport.runways:
                     if runway.name == "14L":  # 안쪽 활주로
-                        if runway_available_times[runway] <= time:
+                        # 현재 시간에 폐쇄되어 있는지 확인 (event_queue에서)
+                        is_closed = False
+                        for closure in runway_closures:
+                            if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
+                               closure['start_time'] <= time <= closure['end_time']:
+                                is_closed = True
+                                break
+                        # runway_available_times는 이미 실제 상태 반영됨
+                        if not is_closed and runway_available_times[runway] <= time:
                             assigned_runway = runway
                             break
                 
@@ -127,7 +131,15 @@ class Scheduler:
                 assigned_runway = None
                 for runway in self.sim.airport.runways:
                     if runway.name == "14R":  # 바깥쪽 활주로
-                        if runway_available_times[runway] <= time:
+                        # 현재 시간에 폐쇄되어 있는지 확인 (event_queue에서)
+                        is_closed = False
+                        for closure in runway_closures:
+                            if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
+                               closure['start_time'] <= time <= closure['end_time']:
+                                is_closed = True
+                                break
+                        # runway_available_times는 이미 실제 상태 반영됨
+                        if not is_closed and runway_available_times[runway] <= time:
                             assigned_runway = runway
                             break
                 
@@ -194,17 +206,17 @@ class Scheduler:
             time = next_time
 
     
-    def ml(self, schedules, current_time, event_queue=None, forecast=None):
+    def ml(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """ML 알고리즘 (향후 구현)"""
         # TODO: ML 모델 적용
         return {}
     
-    def rl(self, schedules, current_time, event_queue=None, forecast=None):
+    def rl(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """RL 알고리즘 (향후 구현)"""
         # TODO: 강화학습 에이전트 적용
         return {}
 
-    def advanced(self, schedules, current_time, event_queue=None, forecast=None):
+    def advanced(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """Advanced scheduler using MILP optimization"""
         debug(f"Advanced scheduler algorithm started at {int_to_hhmm_colon(current_time)}")
         
@@ -215,10 +227,17 @@ class Scheduler:
         advanced_scheduler = AdvancedScheduler(self.sim)
         
         # Run the advanced optimization
-        result = advanced_scheduler.optimize(schedules, current_time, event_queue, forecast)
+        result = advanced_scheduler.optimize(schedules, current_time, event_queue, forecast, runway_availability)
         
         # Track runway usage to ensure separation
         runway_usage = {'14L': 0, '14R': 0, '32L': 0, '32R': 0}
+        
+        # Initialize runway usage with actual next_available_time if provided
+        if runway_availability:
+            for runway in self.sim.airport.runways:
+                if runway.name in runway_availability:
+                    runway_usage[runway.name] = max(runway_usage[runway.name], runway_availability[runway.name])
+                    runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], runway_availability[runway.name])
         
         # Assign runways to schedules based on the result
         # This is needed because the advanced scheduler returns times but doesn't assign runways

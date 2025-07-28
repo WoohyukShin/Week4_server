@@ -32,7 +32,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("advanced", self)  # Use advanced algorithm in scheduler
+        self.scheduler = Scheduler("greedy", self)  # Use advanced algorithm in scheduler
         
         # Speed control
         self.speed = 1  # 1x, 2x, 4x, 8x, 64x
@@ -154,6 +154,7 @@ class Simulation:
                 else:
                     continue
             runway.occupied = runway.next_available_time > self.time
+            
         # 스케줄 상태 갱신 및 완료 처리
         for s in self.schedules:
             if not hasattr(s, 'complete_time'):
@@ -179,6 +180,15 @@ class Simulation:
                 if schedule.is_takeoff and schedule.etd is not None:
                     taxi_start_time = schedule.etd - 10
                     if self.time >= taxi_start_time:
+                        # Ensure runway is assigned before taxiing
+                        if not schedule.runway:
+                            assigned_runway = self._get_available_runway("takeoff")
+                            if assigned_runway:
+                                schedule.runway = assigned_runway
+                                debug(f"Assigned runway {assigned_runway.get_current_direction()} to {schedule.flight.flight_id} for takeoff")
+                            else:
+                                debug(f"WARNING: No runway available for {schedule.flight.flight_id} takeoff")
+                        
                         runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
                         debug(f"{schedule.flight.flight_id} TAXIING TO RUNWAY {runway_direction}")
                         schedule.status = FlightStatus.TAXI_TO_RUNWAY
@@ -213,6 +223,15 @@ class Simulation:
             case FlightStatus.WAITING:
                 # 실제 배정된 시간(ETA)에 착륙 (알고리즘이 이미 결정했으므로 강제 실행)
                 if not schedule.is_takeoff and schedule.eta is not None and self.time >= schedule.eta:
+                    # Ensure runway is assigned before landing
+                    if not schedule.runway:
+                        assigned_runway = self._get_available_runway("landing")
+                        if assigned_runway:
+                            schedule.runway = assigned_runway
+                            debug(f"Assigned runway {assigned_runway.get_current_direction()} to {schedule.flight.flight_id} for landing")
+                        else:
+                            debug(f"WARNING: No runway available for {schedule.flight.flight_id} landing")
+                    
                     runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
                     debug(f"{schedule.flight.flight_id} LANDING ON RUNWAY {runway_direction}")
                     schedule.status = FlightStatus.LANDING
@@ -234,13 +253,12 @@ class Simulation:
                     self._check_accident_probability(schedule, "landing")
                     # 위험한 활주로 사용에 대한 추가 loss (착륙 시작 시점에 체크)
                     self._add_runway_safety_loss(schedule, "landing")
+                    
+                    if not hasattr(schedule, 'complete_time'):
+                        schedule.complete_time = self.time
             case FlightStatus.TAXI_TO_GATE:
                 if self.time - schedule.taxi_to_gate_time >= 10:
                     schedule.status = FlightStatus.DORMANT
-                    # 착륙 완료 시 complete_time 기록
-                    if not hasattr(schedule, 'complete_time'):
-                        schedule.complete_time = self.time
-                        debug(f"스케줄 완료: {schedule.flight.flight_id} (착륙 완료)")
         
         if schedule.status != prev_status:
             debug(f"{f.flight_id} : {prev_status.value} → {schedule.status.value} (time={int_to_hhmm_colon(self.time)})")
@@ -297,8 +315,13 @@ class Simulation:
         # Agent에게 전달할 관측 가능한 이벤트만 필터링
         observed_events = self.get_observed_events()
         
+        # 각 활주로의 현재 next_available_time 정보 수집
+        runway_availability = {}
+        for runway in self.airport.runways:
+            runway_availability[runway.name] = runway.next_available_time
+        
         # 현재 스케줄 상태와 관측 가능한 이벤트를 알고리즘에 전달 (즉시 반영)
-        self.scheduler.optimize(self.schedules, self.time, observed_events, weather_forecast)
+        self.scheduler.optimize(self.schedules, self.time, observed_events, weather_forecast, runway_availability)
         
 
     def handle_events(self):
@@ -325,18 +348,9 @@ class Simulation:
         events_to_remove = []
         
         for event in self.event_queue:
-            if event.event_type == "RUNWAY_CLOSURE":
-                # RUNWAY_CLOSURE: 활주로가 다시 열렸는지 확인
-                runway_name = event.target
-                for runway in self.airport.runways:
-                    if (runway.name == runway_name or runway.inverted_name == runway_name):
-                        if not runway.closed and self.time >= event.time + event.duration:
-                            events_to_remove.append(event)
-                            debug(f"RUNWAY_CLOSURE 완료 제거: {runway_name}")
-                            break
-            else:
                 if event.time == self.time:
                     events_to_remove.append(event)
+        
         for event in events_to_remove:
             if event in self.event_queue:
                 self.event_queue.remove(event)
@@ -409,6 +423,11 @@ class Simulation:
     
     def _get_runway_for_schedule(self, schedule):
         """Get appropriate runway for a schedule based on operation type and status"""
+        # First try to get from assigned runway
+        if hasattr(schedule, 'runway') and schedule.runway:
+            return schedule.runway.get_current_direction()
+        
+        # Fallback based on operation type
         if schedule.is_takeoff:
             # Takeoff: prefer 14L/32R
             for runway in self.airport.runways:
@@ -432,23 +451,17 @@ class Simulation:
                 if current_direction in ["14L", "32R"] and not runway.closed:
                     return current_direction
         
-        # Default fallback
+        # If all else fails, return the first available runway direction
+        for runway in self.airport.runways:
+            if not runway.closed:
+                return runway.get_current_direction()
+        
+        # Last resort fallback
         return "14L"
 
     def on_event(self, event):
         debug(f"프론트에서 이벤트 수신: {event}")
 
-        queue_events = ["RUNWAY_CLOSURE"]
-        if event['event_type'] in queue_events:
-            e = Event(
-                event['event_type'],
-                event.get('targetType', ''),
-                event['target'],
-                self.time,
-                event.get('duration', 0)
-            )
-            self.event_queue.append(e)
-        
         # 즉시 핸들링
         class E: pass
         e = E()

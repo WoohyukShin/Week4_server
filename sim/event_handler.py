@@ -57,7 +57,30 @@ class EventHandler:
                 r.closed = True
                 r.next_available_time = current_time + duration
                 debug(f"  - {r.name}({r.inverted_name}) 활주로 폐쇄")
-
+                
+                # 해당 활주로로 가던 비행기들을 TAXI_TO_GATE로 변경
+                for schedule in self.sim.schedules:
+                    if (schedule.status == FlightStatus.TAXI_TO_RUNWAY):
+                        # TAXI_TO_RUNWAY로 간 시간 계산
+                        taxi_duration = current_time - schedule.start_taxi_time
+                        # 돌아가는 시간 = 간 시간만큼만 (최대 10분)
+                        return_duration = min(taxi_duration, 10)
+                        
+                        # 반대 방향의 runway name 저장 (프론트엔드 애니메이션용)
+                        if schedule.runway and schedule.runway.name == r.name:
+                            schedule.opposite_runway_direction = r.inverted_name  # 14L -> 32R
+                        elif schedule.runway and schedule.runway.name == r.inverted_name:
+                            schedule.opposite_runway_direction = r.name  # 32R -> 14L
+                        else:
+                            # If no runway assigned, use default based on operation type
+                            if schedule.is_takeoff:
+                                schedule.opposite_runway_direction = "32R" if r.name == "14L" else "14L"
+                            else:
+                                schedule.opposite_runway_direction = "32L" if r.name == "14R" else "14R"
+                  
+                        schedule.status = FlightStatus.TAXI_TO_GATE
+                        schedule.taxi_to_gate_time = current_time - return_duration  # 돌아가는 시간만큼 앞으로 설정
+                    
     def _reopen_runway(self, runway_name):
         debug(f"RUNWAY_REOPEN: {runway_name} 재개방")
         for r in self.sim.airport.runways:
@@ -133,6 +156,10 @@ class EventHandler:
         if flight:
             landing_schedule = Schedule(flight, is_takeoff=False)
             landing_schedule.status = FlightStatus.WAITING
+            for runway in self.sim.airport.runways:
+                if runway.name == "14R":
+                    landing_schedule.runway = runway
+                    break
             self.sim.schedules.append(landing_schedule)
     
     def _send_event_to_frontend(self, event_type, target, duration, current_time):

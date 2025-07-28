@@ -35,7 +35,8 @@ class AdvancedScheduler:
         
     def optimize(self, schedules: List[Schedule], current_time: int, 
                 event_queue: Optional[List[Event]] = None, 
-                forecast: Optional[Dict] = None) -> Dict:
+                forecast: Optional[Dict] = None,
+                runway_availability: Optional[Dict] = None) -> Dict:
         """
         Main optimization method - replaces the greedy algorithm
         """
@@ -45,7 +46,7 @@ class AdvancedScheduler:
             return {}
             
         # Preprocess data
-        runway_constraints = self._analyze_runway_constraints(event_queue or [], current_time)
+        runway_constraints = self._analyze_runway_constraints(event_queue or [], current_time, runway_availability)
         weather_risks = self._calculate_weather_risks(forecast or {}, current_time)
         
         # Separate takeoff and landing schedules
@@ -66,14 +67,14 @@ class AdvancedScheduler:
                 debug("MILP optimization failed, using heuristic fallback")
                 optimized_schedule = self._heuristic_optimization(
                     takeoff_schedules, landing_schedules, current_time,
-                    runway_constraints, weather_risks
+                    runway_constraints, weather_risks, runway_availability
                 )
                 
         except Exception as e:
             debug(f"Optimization error: {e}, using heuristic fallback")
             optimized_schedule = self._heuristic_optimization(
                 takeoff_schedules, landing_schedules, current_time,
-                runway_constraints, weather_risks
+                runway_constraints, weather_risks, runway_availability
             )
         
         # Log results
@@ -85,7 +86,7 @@ class AdvancedScheduler:
         
         return optimized_schedule
     
-    def _analyze_runway_constraints(self, event_queue: List[Event], current_time: int) -> Dict:
+    def _analyze_runway_constraints(self, event_queue: List[Event], current_time: int, runway_availability: Optional[Dict]) -> Dict:
         """
         Analyze runway constraints from events
         """
@@ -104,8 +105,13 @@ class AdvancedScheduler:
             # Mark current availability for both directions using next_available_time
             for t in range(self.time_horizon):
                 time_step = current_time + t
-                # Use runway's next_available_time to determine availability
-                available = not runway.closed and runway.next_available_time <= time_step
+                
+                # Use runway_availability if provided, otherwise fall back to runway state
+                if runway_availability and runway.name in runway_availability:
+                    next_available = runway_availability[runway.name]
+                    available = not runway.closed and next_available <= time_step
+                else:
+                    available = not runway.closed and runway.next_available_time <= time_step
                 
                 # Both normal and inverted names get the same availability initially
                 constraints['runway_availability'][runway.name].append(available)
@@ -129,7 +135,7 @@ class AdvancedScheduler:
                         
             elif event.event_type == "RUNWAY_INVERT":
                 constraints['inversions'].append(event.time)
-        
+                
         return constraints
     
     def _calculate_weather_risks(self, forecast: Dict, current_time: int) -> Dict:
@@ -309,7 +315,8 @@ class AdvancedScheduler:
     
     def _heuristic_optimization(self, takeoff_schedules: List[Schedule], 
                                landing_schedules: List[Schedule], current_time: int,
-                               runway_constraints: Dict, weather_risks: Dict) -> Dict:
+                               runway_constraints: Dict, weather_risks: Dict,
+                               runway_availability: Optional[Dict] = None) -> Dict:
         """
         Heuristic fallback optimization based on PALS algorithm
         """
@@ -323,6 +330,13 @@ class AdvancedScheduler:
         runway_usage = {
             '14L': 0, '14R': 0, '32L': 0, '32R': 0
         }
+        
+        # Initialize runway usage with actual next_available_time if provided
+        if runway_availability:
+            for runway in self.sim.airport.runways:
+                if runway.name in runway_availability:
+                    runway_usage[runway.name] = max(runway_usage[runway.name], runway_availability[runway.name])
+                    runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], runway_availability[runway.name])
         
         # Process takeoff schedules
         for schedule in takeoff_schedules:

@@ -183,6 +183,10 @@ class Simulation:
                         debug(f"{schedule.flight.flight_id} TAXIING TO RUNWAY {runway_direction}")
                         schedule.status = FlightStatus.TAXI_TO_RUNWAY
                         schedule.start_taxi_time = self.time
+                        
+                        # Re-optimize to ensure proper separation for remaining flights
+                        debug("Flight started taxiing - re-optimizing for separation")
+                        self.do_action()
             case FlightStatus.TAXI_TO_RUNWAY:
                 # 실제 배정된 시간(ETD)에 이륙 (알고리즘이 이미 결정했으므로 강제 실행)
                 if schedule.is_takeoff and schedule.etd is not None and self.time >= schedule.etd:
@@ -243,6 +247,10 @@ class Simulation:
             # 상태 변경이 있을 때 액션 재수행 (이륙/착륙 완료 시에만)
             if schedule.status in [FlightStatus.TAKE_OFF, FlightStatus.LANDING]:
                 debug("스케줄 상태 변경 후 액션 재수행")
+                self.do_action()
+            # Also re-optimize when flights start taxiing to maintain separation
+            elif schedule.status == FlightStatus.TAXI_TO_RUNWAY:
+                debug("Flight started taxiing - re-optimizing for separation")
                 self.do_action()
 
 
@@ -379,6 +387,15 @@ class Simulation:
 
     def schedule_to_flight_dict(self, schedule, status_to_str):
         f = schedule.flight
+        
+        # Ensure runway is assigned for all flight states
+        runway_direction = None
+        if hasattr(schedule, 'runway') and schedule.runway and hasattr(schedule.runway, 'get_current_direction'):
+            runway_direction = schedule.runway.get_current_direction()
+        else:
+            # Fallback: assign runway based on operation type and status
+            runway_direction = self._get_runway_for_schedule(schedule)
+        
         return {
             "flight_id": f.flight_id,
             "status": status_to_str(schedule.status),
@@ -387,8 +404,36 @@ class Simulation:
             "depAirport": f.dep_airport,
             "arrivalAirport": f.arr_airport,
             "airline": f.airline,
-            "runway": schedule.runway.get_current_direction() if (hasattr(schedule, 'runway') and schedule.runway and hasattr(schedule.runway, 'get_current_direction')) else None
+            "runway": runway_direction
         }
+    
+    def _get_runway_for_schedule(self, schedule):
+        """Get appropriate runway for a schedule based on operation type and status"""
+        if schedule.is_takeoff:
+            # Takeoff: prefer 14L/32R
+            for runway in self.airport.runways:
+                current_direction = runway.get_current_direction()
+                if current_direction in ["14L", "32R"] and not runway.closed:
+                    return current_direction
+            # Fallback to 14R/32L
+            for runway in self.airport.runways:
+                current_direction = runway.get_current_direction()
+                if current_direction in ["14R", "32L"] and not runway.closed:
+                    return current_direction
+        else:
+            # Landing: prefer 14R/32L
+            for runway in self.airport.runways:
+                current_direction = runway.get_current_direction()
+                if current_direction in ["14R", "32L"] and not runway.closed:
+                    return current_direction
+            # Fallback to 14L/32R
+            for runway in self.airport.runways:
+                current_direction = runway.get_current_direction()
+                if current_direction in ["14L", "32R"] and not runway.closed:
+                    return current_direction
+        
+        # Default fallback
+        return "14L"
 
     def on_event(self, event):
         debug(f"프론트에서 이벤트 수신: {event}")

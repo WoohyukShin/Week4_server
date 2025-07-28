@@ -150,6 +150,10 @@ class EventHandler:
         if flight:
             landing_schedule = Schedule(flight, is_takeoff=False)
             landing_schedule.status = FlightStatus.WAITING
+            for runway in self.sim.airport.runways:
+                if runway.name == "14R":
+                    landing_schedule.runway = runway
+                    break
             self.sim.schedules.append(landing_schedule)
     
     def _send_event_to_frontend(self, event_type, target, duration, current_time):

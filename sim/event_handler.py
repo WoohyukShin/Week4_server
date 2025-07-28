@@ -125,8 +125,10 @@ class EventHandler:
                 takeoff_runway = runway.name
                 break
         if takeoff_runway:
-            runway_closure_event = Event("RUNWAY_CLOSURE", "Runway", takeoff_runway, current_time, duration)
-            self.handle(runway_closure_event, current_time)
+            # 프론트엔드에 전송
+            self._send_event_to_frontend("RUNWAY_CLOSURE", takeoff_runway, duration, current_time)
+            # 직접 활주로 폐쇄
+            self._close_runway(takeoff_runway, duration, current_time)
 
     def _landing_crash(self, flight_id, duration, current_time):
         debug(f"LANDING_CRASH: {flight_id} 착륙 중 사고, {duration}분간 착륙 활주로 폐쇄")
@@ -137,8 +139,10 @@ class EventHandler:
                 landing_runway = runway.name
                 break
         if landing_runway:
-            runway_closure_event = Event("RUNWAY_CLOSURE", "Runway", landing_runway, current_time, duration)
-            self.handle(runway_closure_event, current_time)
+            # 프론트엔드에 전송
+            self._send_event_to_frontend("RUNWAY_CLOSURE", landing_runway, duration, current_time)
+            # 직접 활주로 폐쇄
+            self._close_runway(landing_runway, duration, current_time)
 
     def _invert_runway(self):
         debug("RUNWAY_INVERT: 모든 활주로 방향 전환")

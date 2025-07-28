@@ -50,16 +50,20 @@ class EventHandler:
     def _close_runway(self, runway_name, duration, current_time):
         debug(f"RUNWAY_CLOSURE: {runway_name} {duration}분간 폐쇄")
         for r in self.sim.airport.runways:
-            if r.name == runway_name:
+            # 현재 활주로의 name 또는 inverted_name과 매칭되는지 확인
+            if r.name == runway_name or r.inverted_name == runway_name:
                 r.closed = True
                 r.next_available_time = current_time + duration
+                debug(f"  - {r.name}({r.inverted_name}) 활주로 폐쇄")
 
     def _reopen_runway(self, runway_name):
         debug(f"RUNWAY_REOPEN: {runway_name} 재개방")
         for r in self.sim.airport.runways:
-            if r.name == runway_name:
+            # 현재 활주로의 name 또는 inverted_name과 매칭되는지 확인
+            if r.name == runway_name or r.inverted_name == runway_name:
                 r.closed = False
                 r.next_available_time = self.sim.time
+                debug(f"  - {r.name}({r.inverted_name}) 활주로 재개방")
 
     def _cancel_flight(self, flight_id):
         debug(f"FLIGHT_CANCEL: {flight_id} 취소")

@@ -18,27 +18,25 @@ def create_rkss_airport():
     return Airport("RKSS", "GMP", runways, taxiways)
 
 def main():
-    # 랜덤 시나리오 사용 여부
-    use_random_scenario = True  # True로 설정하면 랜덤 시나리오 사용
-    save_random_scenario = False  # False로 설정하면 시나리오 파일 저장 안함
+    # 랜덤 시나리오 사용
+    use_random_scenario = True
+    # 시나리오 파일 저장
+    save_random_scenario = False
     
     if use_random_scenario:
-        # 랜덤 시나리오 생성
         debug("랜덤 시나리오를 생성합니다...")
         random_scenario = generate_random_scenario(num_flights=50, num_events=5)
         
-        # 시나리오 저장 (선택사항)
         if save_random_scenario:
             scenario_dir = "scenario"
             if not os.path.exists(scenario_dir):
                 os.makedirs(scenario_dir)
             save_random_scenario(random_scenario, f"{scenario_dir}/random_scenario.json")
         
-        # 랜덤 시나리오를 메모리에서 직접 로드
         from utils.scenario_loader import load_scenario_from_dict
         schedules, landing_flights, events = load_scenario_from_dict(random_scenario)
     else:
-        # 기존 시나리오 파일 사용
+        # 시나리오 파일 사용
         scenario_path = "scenario/sample_scenario.json"
         schedules, landing_flights, events = load_scenario(scenario_path)
     

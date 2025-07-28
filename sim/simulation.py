@@ -296,8 +296,10 @@ class Simulation:
                         schedule.eta = new_time
 
     def handle_events(self):
+        # 현재 시간과 일치하는 이벤트 처리
         triggered = [e for e in self.event_queue if e.time == self.time]
         events_handled = False
+        
         for event in triggered:
             debug("handling event...")
             self.event_handler.handle(event, self.time)

@@ -150,6 +150,29 @@ def generate_random_scenario(num_flights=50, num_events=5):
         }
         scenario["events"].append(event)
     
+    # 로그 출력
+    debug("======= RANDOM SCENARIO GENERATED ========")
+    debug("FLIGHTS:")
+    
+    # 비행기 정보를 시간 순으로 정렬
+    sorted_flights = sorted(scenario["flights"], key=lambda x: (x["etd"] or x["eta"] or 0))
+    
+    for flight in sorted_flights:
+        if flight["dep_airport"] == "GMP":  # 이륙
+            debug(f"DEP {flight['flight_id']} {flight['etd']}")
+        else:  # 착륙
+            debug(f"ARR {flight['flight_id']} {flight['eta']}")
+    
+    debug("")
+    debug("EVENTS:")
+    # 이벤트 정보를 시간 순으로 정렬
+    sorted_events = sorted(scenario["events"], key=lambda x: x["time"])
+    
+    for event in sorted_events:
+        debug(f"{event['event_type']} {event['time']} {event['target']} {event['duration']}")
+    
+    debug("==========================================")
+    
     return scenario
 
 def save_random_scenario(scenario, filename="random_scenario.json"):
@@ -161,12 +184,6 @@ def save_random_scenario(scenario, filename="random_scenario.json"):
 def load_scenario_from_dict(data):
     """
     메모리에서 직접 시나리오 딕셔너리를 로드
-    
-    Args:
-        data: 시나리오 딕셔너리
-    
-    Returns:
-        tuple: (schedules, landing_flights, events)
     """
     # flight, event 시간을 Timestep으로 변환
     for flight_data in data.get('flights', []):
@@ -180,7 +197,6 @@ def load_scenario_from_dict(data):
         if 'time' in event_data and event_data['time'] is not None:
             original_time = event_data['time']
             event_data['time'] = hhmm_to_int(event_data['time'])
-            debug(f"이벤트 시간 변환: {original_time} -> {event_data['time']}")
     
     # Flight 클래스에서 받을 수 있는 필드만 필터링 (priority 포함)
     flight_fields = ['flight_id', 'etd', 'eta', 'dep_airport', 'arr_airport', 'airline', 'priority']
@@ -196,7 +212,6 @@ def load_scenario_from_dict(data):
     for f in takeoff_flights:
         schedule = Schedule(f, is_takeoff=True)
         schedules.append(schedule)
-        debug(f"Schedule created: {schedule.flight.flight_id} (priority {schedule.priority})")
     events = [Event(e['event_type'], e['target_type'], e['target'], e['time'], e['duration']) for e in data.get('events', [])]
     return schedules, landing_flights, events
 

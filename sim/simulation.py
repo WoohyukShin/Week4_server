@@ -7,6 +7,7 @@ from sim.scheduler import Scheduler
 from utils.time_utils import int_to_hhmm, int_to_hhmm_colon, int_to_hhmm_str
 from sim.flight import FlightStatus
 from sim.schedule import Schedule
+from sim.event import Event
 from sim.event_handler import EventHandler
 from sim.weather import Weather
 import random
@@ -53,7 +54,8 @@ class Simulation:
         
         # Statistics tracking
         self.total_delay_time_weighted = 0.0  # Priority-weighted delay time
-        self.total_flights = len(schedules)
+        self.total_flights = 0  # 완료될 때마다 1씩 증가
+        self.cancelled_flights = 0  # 취소된 비행 수
         self.safety_loss_breakdown = {
             "weather_risk": 0.0,
             "runway_closed": 0.0,
@@ -79,7 +81,6 @@ class Simulation:
         
         # 시뮬레이션 시작 시 초기 액션 수행
         self.do_action()
-        
         end_buffer = 5
         end_time_actual = None
         while self.running:
@@ -119,6 +120,10 @@ class Simulation:
                     stats = self.calculate_statistics()
                     debug(f"TOTAL DELAY TIME (WITH PRIORITY): {stats['total_delay_time_weighted']:.1f}")
                     debug(f"TOTAL FLIGHTS: {stats['total_flights']}")
+                    debug(f"CANCELLED FLIGHTS: {self.cancelled_flights}")
+                    if stats['total_flights'] > 0:
+                        avg_delay = stats['total_delay_time_weighted'] / stats['total_flights']
+                        debug(f"AVERAGE DELAY TIME: {avg_delay:.1f}")
                     debug(f"TOTAL SAFETY LOSS: {stats['total_safety_loss']:.1f}")
                     for cause, loss in stats['safety_breakdown'].items():
                         if loss > 0:
@@ -174,7 +179,8 @@ class Simulation:
                 if schedule.is_takeoff and schedule.etd is not None:
                     taxi_start_time = schedule.etd - 10
                     if self.time >= taxi_start_time:
-                        debug(f"{schedule.flight.flight_id} TAXIING TO RUNWAY {schedule.runway.get_current_direction()}")
+                        runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
+                        debug(f"{schedule.flight.flight_id} TAXIING TO RUNWAY {runway_direction}")
                         schedule.status = FlightStatus.TAXI_TO_RUNWAY
                         schedule.start_taxi_time = self.time
             case FlightStatus.TAXI_TO_RUNWAY:
@@ -194,7 +200,8 @@ class Simulation:
                     self._add_runway_safety_loss(schedule, "takeoff")
             case FlightStatus.TAKE_OFF:
                 if self.time - schedule.takeoff_time >= 1:
-                    schedule.status = FlightStatus.DORMANT
+                    schedule.status = FlightStatus.DORMANT  
+                    self.total_flights += 1
                     # 이륙 완료 시 complete_time 기록
                     if not hasattr(schedule, 'complete_time'):
                         schedule.complete_time = self.time
@@ -208,6 +215,7 @@ class Simulation:
                     schedule.landing_time = self.time
             case FlightStatus.LANDING:
                 if self.time - schedule.landing_time >= 1:
+                    self.total_flights += 1
                     schedule.status = FlightStatus.TAXI_TO_GATE
                     runway_direction = schedule.runway.get_current_direction() if schedule.runway else "Unknown"
                     debug(f"{schedule.flight.flight_id} TAXIING TO GATE {runway_direction}")
@@ -281,35 +289,62 @@ class Simulation:
         # Agent에게 전달할 관측 가능한 이벤트만 필터링
         observed_events = self.get_observed_events()
         
-        # 현재 스케줄 상태와 관측 가능한 이벤트를 알고리즘에 전달
-        changes = self.scheduler.optimize(self.schedules, self.time, observed_events, weather_forecast)
+        # 현재 스케줄 상태와 관측 가능한 이벤트를 알고리즘에 전달 (즉시 반영)
+        self.scheduler.optimize(self.schedules, self.time, observed_events, weather_forecast)
         
-        # 변경사항을 스케줄에 적용
-        if changes:
-            change_list = []
-            for flight_id, new_time in changes.items():
-                schedule = next((s for s in self.schedules if s.flight.flight_id == flight_id), None)
-                if schedule:
-                    if schedule.is_takeoff:
-                        schedule.etd = new_time
-                    else:
-                        schedule.eta = new_time
 
     def handle_events(self):
         # 현재 시간과 일치하는 이벤트 처리
         triggered = [e for e in self.event_queue if e.time == self.time]
         events_handled = False
         
+        # 이벤트 처리
         for event in triggered:
             debug("handling event...")
             self.event_handler.handle(event, self.time)
-            self.event_queue.remove(event)
             events_handled = True
         
+        # 이벤트 완료 여부 확인 및 제거
+        self._cleanup_completed_events()
+        # 만료된 이벤트들 정리 (무한 루프 방지)
+        self._cleanup_expired_events()
         # 이벤트가 처리되었으면 액션 재수행
         if events_handled:
-            debug("이벤트 처리 후 액션 재수행")
             self.do_action()
+    
+    def _cleanup_completed_events(self):
+        """완료된 이벤트들을 제거"""
+        events_to_remove = []
+        
+        for event in self.event_queue:
+            if event.event_type == "RUNWAY_CLOSURE":
+                # RUNWAY_CLOSURE: 활주로가 다시 열렸는지 확인
+                runway_name = event.target
+                for runway in self.airport.runways:
+                    if (runway.name == runway_name or runway.inverted_name == runway_name):
+                        if not runway.closed and self.time >= event.time + event.duration:
+                            events_to_remove.append(event)
+                            debug(f"RUNWAY_CLOSURE 완료 제거: {runway_name}")
+                            break
+            else:
+                if event.time == self.time:
+                    events_to_remove.append(event)
+        for event in events_to_remove:
+            if event in self.event_queue:
+                self.event_queue.remove(event)
+    
+    def _cleanup_expired_events(self):
+        """만료된 이벤트들을 정리 (무한 루프 방지)"""
+        events_to_remove = []
+        
+        for event in self.event_queue:
+            if hasattr(event, 'duration') and event.duration > 0:
+                if event.time + event.duration < self.time:
+                    events_to_remove.append(event)
+        
+        for event in events_to_remove:
+            if event in self.event_queue:
+                self.event_queue.remove(event)
 
     def send_state_update(self):
         if self.ws and self.mode == SimulationMode.INTERACTIVE:
@@ -357,16 +392,26 @@ class Simulation:
 
     def on_event(self, event):
         debug(f"프론트에서 이벤트 수신: {event}")
-        # 프론트에서 온 이벤트를 즉시 핸들링
-        # event dict를 Event 객체로 변환
+
+        queue_events = ["RUNWAY_CLOSURE"]
+        if event['event_type'] in queue_events:
+            e = Event(
+                event['event_type'],
+                event.get('targetType', ''),
+                event['target'],
+                self.time,
+                event.get('duration', 0)
+            )
+            self.event_queue.append(e)
+        
+        # 즉시 핸들링
         class E: pass
         e = E()
         e.event_type = event['event_type']
         e.target = event['target']
         e.duration = event.get('duration', 0)
-        e.time = self.time  # 현재 시간으로 설정
+        e.time = self.time
         
-        # 즉시 핸들링
         self.event_handler.handle(e, self.time)
         
         # 즉시 액션 재수행
@@ -431,12 +476,11 @@ class Simulation:
                     schedule.delay_minutes = delay
     
     def _add_go_around_loss(self, schedule):
-        """Go-around 손실 계산 및 누적 (정규화된 priority 기반 weighted sum)"""
-        # 정규화된 priority 사용 (0-1 범위)
-        normalized_priority = schedule.get_normalized_priority()
-        loss = normalized_priority * 15 * 100  # 15분 지연, 스케일 조정을 위해 100 곱함
+        """Go-around 손실 계산 및 누적 (priority 고려하지 않음)"""
+        # Priority 고려하지 않고 고정 손실
+        loss = 15 * 100  # 15분 지연, 스케일 조정을 위해 100 곱함
         self.total_delay_loss += loss
-        debug(f"Go-around 손실: {schedule.flight.flight_id} 15분 지연, priority {schedule.priority} (정규화: {normalized_priority:.2f}) -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
+        debug(f"Go-around 손실: {schedule.flight.flight_id} 15분 지연 -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
     
     def _add_safety_loss(self, schedule, operation_type):
         """날씨 기반 safety score 계산 (안전한 비행 시에는 큰 차이 없도록)"""
@@ -504,8 +548,8 @@ class Simulation:
             
             self.event_queue.append(crash_event)
             
-            # 대량의 safety loss 추가
-            crash_safety_loss = 1000 * risk_multiplier * (1 + schedule.get_normalized_priority())
+            # 대량의 safety loss 추가 (priority 고려하지 않음)
+            crash_safety_loss = 1000
             self.total_safety_loss += crash_safety_loss
             self.safety_loss_breakdown["accidents"] += crash_safety_loss
             
@@ -526,15 +570,15 @@ class Simulation:
         
         # 1. 활주로가 닫혀있는 경우
         if runway.closed:
-            safety_loss += 500.0 * schedule.get_normalized_priority()
-            self.safety_loss_breakdown["runway_closed"] += 500.0 * schedule.get_normalized_priority()
+            safety_loss += 500.0
+            self.safety_loss_breakdown["runway_closed"] += 500.0
             debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using CLOSED runway {runway.get_current_direction()}")
         
         # 2. 활주로가 점유된 상태인 경우 (이착륙 시작 시점에 체크)
         if runway.occupied and self.time < runway.next_available_time:
-            safety_loss += 300.0 * schedule.get_normalized_priority()
-            self.safety_loss_breakdown["runway_occupied"] += 300.0 * schedule.get_normalized_priority()
-            debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()}")
+            safety_loss += 300.0
+            self.safety_loss_breakdown["runway_occupied"] += 300.0
+            debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()} (current_time: {self.time}, next_available: {runway.next_available_time})")
         
         # 3. 동시 이착륙 체크
         self._check_simultaneous_operations(schedule, operation_type)
@@ -633,7 +677,7 @@ class Simulation:
         
         for event in self.event_queue:
             # 예정된 일정만 전달 (긴급/예측 불가능한 이벤트는 제외)
-            if event.event_type in ["RUNWAY_CLOSURE", "RUNWAY_INVERT"]:
+            if event.event_type in ["RUNWAY_CLOSURE"]:
                 observed_events.append(event)
         
         return observed_events

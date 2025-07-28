@@ -7,13 +7,13 @@ from sim.event import Event
 from utils.time_utils import hhmm_to_int, int_to_hhmm
 from utils.logger import debug
 
-def generate_random_scenario(num_flights=50, num_events=5):
+def generate_random_scenario(num_flights=50, num_events=10):
     """
     강화학습을 위한 랜덤 시나리오 생성
     
     Args:
         num_flights: 생성할 비행기 수 (기본값: 50)
-        num_events: 생성할 이벤트 수 (기본값: 5)
+        num_events: 생성할 이벤트 수 (기본값: 10)
     
     Returns:
         dict: JSON 형태의 시나리오 데이터
@@ -77,57 +77,51 @@ def generate_random_scenario(num_flights=50, num_events=5):
         "FLIGHT_CANCEL",
         "FLIGHT_DELAY",
         "GO_AROUND",
-        "TAKEOFF_CRASH",
-        "LANDING_CRASH",
         "RUNWAY_INVERT"
     ]
     
     # 이벤트별 가중치 (자주 발생하는 이벤트에 높은 가중치)
-    event_weights = [0.1, 0.15, 0.1, 0.27, 0.15, 0.01, 0.02, 0.2]
+    event_weights = [0.15, 0.2, 0.15, 0.3, 0.1, 0.1]
     
     for i in range(num_events):
         event_type = random.choices(event_types, weights=event_weights)[0]
-        event_time = random.randint(360, 540)  # 0600 ~ 0900
         
-        # FLIGHT_DELAY는 이륙 항공편에만 적용
-        if event_type == "FLIGHT_DELAY":
-            # 이륙 항공편 중에서 선택
-            takeoff_flights = [f for f in scenario["flights"] if f["dep_airport"] == "GMP"]
+        # 인과관계를 고려한 이벤트 시간 설정
+        if event_type == "FLIGHT_CANCEL" or event_type == "FLIGHT_DELAY":
+            # 이륙 항공편의 이륙 시간 전에 발생해야 함
+            takeoff_flights = [f for f in scenario["flights"] if f["dep_airport"] == "GMP" and f["etd"] is not None]
             if takeoff_flights:
                 target_flight = random.choice(takeoff_flights)
-                event_data = {
-                    "type": event_type,
-                    "time": event_time,
-                    "flight_id": target_flight["flight_id"],
-                    "duration": random.randint(10, 30)  # 10~30분 지연
-                }
+                # 이륙 시간 10-60분 전에 발생
+                event_time = max(360, target_flight["etd"] - random.randint(10, 60))
             else:
-                # 이륙 항공편이 없으면 다른 이벤트로 변경
-                event_type = random.choice([e for e in event_types if e != "FLIGHT_DELAY"])
-                event_data = {
-                    "type": event_type,
-                    "time": event_time
-                }
+                event_time = random.randint(360, 540)  # 0600 ~ 0900
+        elif event_type == "GO_AROUND":
+            # 착륙 항공편의 착륙 시간 전에 발생해야 함
+            landing_flights = [f for f in scenario["flights"] if f["arr_airport"] == "GMP" and f["eta"] is not None]
+            if landing_flights:
+                target_flight = random.choice(landing_flights)
+                # 착륙 시간 5-15분 전에 발생
+                event_time = max(360, target_flight["eta"] - random.randint(5, 15))
+            else:
+                event_time = random.randint(360, 540)  # 0600 ~ 0900
         else:
-            event_data = {
-                "type": event_type,
-                "time": event_time
-            }
+            event_time = random.randint(360, 540)  # 0600 ~ 090
         
         # 이벤트 타입별 설정
-        if event_type in ["EMERGENCY_LANDING", "FLIGHT_CANCEL", "FLIGHT_DELAY", "GO_AROUND", "TAKEOFF_CRASH", "LANDING_CRASH"]:
+        if event_type in ["EMERGENCY_LANDING", "FLIGHT_CANCEL", "FLIGHT_DELAY", "GO_AROUND"]:
             # 비행기 관련 이벤트
             target_flight = random.choice([f for f in scenario["flights"] if f["flight_id"] in flight_ids])
             target = target_flight["flight_id"]
             target_type = "flight"
             
-            if event_type in ["EMERGENCY_LANDING", "TAKEOFF_CRASH", "LANDING_CRASH"]:
+            if event_type == "EMERGENCY_LANDING":
                 duration = random.randint(10, 60)
             elif event_type == "FLIGHT_DELAY":
                 duration = random.randint(5, 30)
             else:
                 duration = 0
-                
+        
         elif event_type == "RUNWAY_CLOSURE":
             # 활주로 폐쇄 이벤트
             runways = ["14L", "14R", "32L", "32R"]

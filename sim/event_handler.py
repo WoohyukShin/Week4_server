@@ -1,6 +1,7 @@
 from sim.flight import FlightStatus, Flight
 from sim.schedule import Schedule, PRI_MAX
 from utils.logger import debug
+from sim.event import Event
 
 class EventHandler:
     def __init__(self, simulation):
@@ -12,8 +13,9 @@ class EventHandler:
         duration = event.duration
         debug(f"{etype}({target}) at {current_time} (duration={duration})")
         
-        # WebSocket으로 프론트엔드에 이벤트 정보 전송
-        self._send_event_to_frontend(etype, target, duration, current_time)
+        if etype != "LANDING_ANNOUNCE":
+            # WebSocket으로 프론트엔드에 이벤트 정보 전송
+            self._send_event_to_frontend(etype, target, duration, current_time)
         
         match etype:
             case "EMERGENCY_LANDING":
@@ -37,7 +39,7 @@ class EventHandler:
 
     def _emergency_landing(self, flight_id, duration, current_time):
         debug(f"EMERGENCY_LANDING: {flight_id} {duration}분 내 착륙 필요")
-        flight = Flight(flight_id, etd=None, eta=current_time, dep_airport=None, arr_airport=None, airline="")
+        flight = Flight(flight_id, etd=None, eta=current_time + 3, dep_airport=None, arr_airport=None, airline="")
         emergency_schedule = Schedule(
             flight,
             is_takeoff=False,
@@ -70,6 +72,7 @@ class EventHandler:
         for s in self.sim.schedules:
             if s.flight.flight_id == flight_id:
                 s.status = FlightStatus.CANCELLED
+                self.sim.cancelled_flights += 1  # 취소된 비행 수 증가
 
     def _delay_flight(self, flight_id, duration, current_time):
         debug(f"FLIGHT_DELAY: {flight_id} {duration}분 지연")
@@ -99,7 +102,8 @@ class EventHandler:
                 takeoff_runway = runway.name
                 break
         if takeoff_runway:
-            self._close_runway(takeoff_runway, duration, current_time)
+            runway_closure_event = Event("RUNWAY_CLOSURE", "Runway", takeoff_runway, current_time, duration)
+            self.handle(runway_closure_event, current_time)
 
     def _landing_crash(self, flight_id, duration, current_time):
         debug(f"LANDING_CRASH: {flight_id} 착륙 중 사고, {duration}분간 착륙 활주로 폐쇄")
@@ -110,7 +114,8 @@ class EventHandler:
                 landing_runway = runway.name
                 break
         if landing_runway:
-            self._close_runway(landing_runway, duration, current_time)
+            runway_closure_event = Event("RUNWAY_CLOSURE", "Runway", landing_runway, current_time, duration)
+            self.handle(runway_closure_event, current_time)
 
     def _invert_runway(self):
         debug("RUNWAY_INVERT: 모든 활주로 방향 전환")

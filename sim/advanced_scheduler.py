@@ -91,16 +91,20 @@ class AdvancedScheduler:
             'runway_availability': {}
         }
         
-        # Initialize runway availability
+        # Initialize runway availability for all possible runway directions
         for runway in self.sim.airport.runways:
+            # Initialize for both normal and inverted names
             constraints['runway_availability'][runway.name] = []
             constraints['runway_availability'][runway.inverted_name] = []
             
-            # Mark current availability
+            # Mark current availability for both directions
             for t in range(self.time_horizon):
                 time_step = current_time + t
                 available = not runway.closed and runway.next_available_time <= time_step
-                constraints['runway_availability'][runway.get_current_direction()].append(available)
+                
+                # Both normal and inverted names get the same availability initially
+                constraints['runway_availability'][runway.name].append(available)
+                constraints['runway_availability'][runway.inverted_name].append(available)
         
         # Process events
         for event in event_queue:
@@ -111,11 +115,12 @@ class AdvancedScheduler:
                     'end_time': event.time + event.duration
                 })
                 
-                # Update availability
-                for t in range(self.time_horizon):
-                    time_step = current_time + t
-                    if event.time <= time_step <= event.time + event.duration:
-                        constraints['runway_availability'][event.target][t] = False
+                # Update availability for the specific runway
+                if event.target in constraints['runway_availability']:
+                    for t in range(self.time_horizon):
+                        time_step = current_time + t
+                        if event.time <= time_step <= event.time + event.duration:
+                            constraints['runway_availability'][event.target][t] = False
                         
             elif event.event_type == "RUNWAY_INVERT":
                 constraints['inversions'].append(event.time)

@@ -56,6 +56,30 @@ class WebSocketServer:
         from sim.scheduler import Scheduler
         self.simulation.scheduler = Scheduler(algorithm, self.simulation)
         
+        # Handle RL algorithm specifically - load the trained model
+        if algorithm == "rl":
+            import os
+            model_path = "models/ppo_best_second.pth"
+            if os.path.exists(model_path):
+                from rl.agent import PPOAgent
+                # RL 에이전트 초기화 및 모델 로드
+                observation_size = 160
+                action_size = 288
+                rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
+                rl_agent.load_model(model_path)
+                self.simulation.set_rl_agent(rl_agent)
+                debug(f"훈련된 RL 모델을 로드했습니다: {model_path}")
+            else:
+                debug(f"모델 파일을 찾을 수 없습니다: {model_path}")
+                # Send error response to frontend
+                response = {
+                    "type": "start_simulation_response",
+                    "success": False,
+                    "error": f"RL model file not found: {model_path}"
+                }
+                await websocket.send(json.dumps(response))
+                return
+        
         # Calculate start time
         schedules = self.simulation.schedules
         min_etd = min([s.flight.etd for s in schedules]) if schedules else 0

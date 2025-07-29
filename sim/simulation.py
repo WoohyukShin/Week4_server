@@ -33,7 +33,6 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-<<<<<<< HEAD
         self.scheduler = Scheduler("rl", self)  # Use advanced algorithm in scheduler
         
         # RL 관련 속성들
@@ -41,9 +40,6 @@ class Simulation:
         self.training_mode = False  # 학습 모드
         self.episode_experiences = []  # 경험 저장
         self.episode_count = 0  # 에피소드 카운트
-=======
-        self.scheduler = Scheduler("greedy", self)  # Use greedy algorithm by default
->>>>>>> ab082a5de8d23d1893d2a23dade796832a9602d9
         
         # Speed control
         self.speed = 1  # 1x, 2x, 4x, 8x, 64x
@@ -719,13 +715,8 @@ class Simulation:
         if runway.occupied and self.time < runway.next_available_time:
             safety_loss += 300.0
             self.safety_loss_breakdown["runway_occupied"] += 300.0
-<<<<<<< HEAD
             self.total_runway_occupied_loss += 300.0
             debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()} (current_time: {self.time}, next_available: {runway.next_available_time})")
-=======
-            debug(f"🚨 RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()} (current_time: {self.time}, next_available: {runway.next_available_time})")
-            debug(f"   - Total runway_occupied loss so far: {self.safety_loss_breakdown['runway_occupied']}")
->>>>>>> ab082a5de8d23d1893d2a23dade796832a9602d9
         
         # 3. 동시 이착륙 체크
         self._check_simultaneous_operations(schedule, operation_type)

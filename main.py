@@ -50,7 +50,7 @@ def main():
     use_ws = False  # WebSocket
     is_training = False  # Training 여부 - True면 디버깅 X
     # RL 모델 사용 설정
-    use_rl = True  # RL 모델 사용 여부
+    use_rl = False  # RL 모델 사용 여부
     train_rl = False  # RL 훈련 여부
 
     # RL 훈련 실행

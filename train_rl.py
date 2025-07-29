@@ -106,7 +106,10 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
         
         # 결과 계산
         final_reward = -sim.get_total_loss()  # 손실을 음수 보상으로 변환
-        completion_rate = len(sim.completed_schedules) / len(sim.schedules) if sim.schedules else 0
+        
+        # 총 비행 수 계산 (완료 + 남은 + 취소)
+        total_flights = len(sim.completed_schedules) + len(sim.schedules) + sim.cancelled_flights
+        completion_rate = len(sim.completed_schedules) / total_flights if total_flights > 0 else 0
         
         # 통계 정보
         stats = sim.calculate_statistics()
@@ -116,7 +119,9 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
         print(f"  완료율: {completion_rate:.1%}")
         print(f"  총 손실: {sim.get_total_loss():.1f}")
         print(f"  완료된 비행: {len(sim.completed_schedules)}")
+        print(f"  남은 비행: {len(sim.schedules)}")
         print(f"  취소된 비행: {sim.cancelled_flights}")
+        print(f"  총 비행: {total_flights}")
         
         # 기존 디버깅 형식으로 Loss 출력
         print("====================")
@@ -133,6 +138,8 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
             'completion_rate': completion_rate,
             'total_loss': sim.get_total_loss(),
             'completed_flights': len(sim.completed_schedules),
+            'remaining_flights': len(sim.schedules),
+            'total_flights': total_flights,
             'cancelled_flights': sim.cancelled_flights,
             'delay_loss': sim.total_delay_loss,
             'safety_loss': sim.total_safety_loss,

@@ -269,11 +269,12 @@ class Weather:
         
         debug(f"Weather condition changed to: {self.condition.value}")
     
-    def get_weather_info(self):
-        """현재 날씨 정보 반환 (Agent용)"""
+    def get_weather_data(self):
+        """현재 날씨 데이터 반환"""
         return {
-            "landing_risk": round(self.landing_risk_multiplier, 2),
-            "takeoff_risk": round(self.takeoff_risk_multiplier, 2),
+            "condition": self.condition,
+            "visibility": self.visibility,
+            "wind_speed": self.wind_speed,
             "forecast": self.forecast
         }
     

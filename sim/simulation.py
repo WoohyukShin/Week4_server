@@ -12,6 +12,7 @@ from sim.event_handler import EventHandler
 from sim.weather import Weather
 import random
 import math
+import numpy as np
 
 class SimulationMode(Enum):
     INTERACTIVE = "interactive"   # WebSocket 연결, 시각화/수동 이벤트
@@ -32,7 +33,13 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("greedy", self)  # Use advanced algorithm in scheduler
+        self.scheduler = Scheduler("rl", self)  # Use advanced algorithm in scheduler
+        
+        # RL 관련 속성들
+        self.rl_agent = None  # RL 에이전트
+        self.training_mode = False  # 학습 모드
+        self.episode_experiences = []  # 경험 저장
+        self.episode_count = 0  # 에피소드 카운트
         
         # Speed control
         self.speed = 1  # 1x, 2x, 4x, 8x, 64x
@@ -47,6 +54,8 @@ class Simulation:
         # Loss 계산을 위한 속성들
         self.total_delay_loss = 0
         self.total_safety_loss = 0
+        self.total_simultaneous_ops_loss = 0
+        self.total_runway_occupied_loss = 0
         
         # Score 계산을 위한 속성들
         self.delay_scores = []  # 각 이착륙의 delay score 저장
@@ -115,6 +124,11 @@ class Simulation:
                     debug(f"SAFETY SCORE: {self.get_safety_score():.1f}")
                     debug(f"TOTAL SCORE: {self.get_total_score():.1f}")
                     debug(f"===========================")
+                    
+                    # RL 에피소드 종료 처리 (학습 모드일 때만)
+                    if self.training_mode and self.rl_agent:
+                        final_reward = -self.get_total_loss()  # 손실을 음수 보상으로 변환
+                        self._end_rl_episode(final_reward)
                     
                     # 통계 정보 출력
                     stats = self.calculate_statistics()
@@ -262,13 +276,18 @@ class Simulation:
         
         if schedule.status != prev_status:
             debug(f"{f.flight_id} : {prev_status.value} → {schedule.status.value} (time={int_to_hhmm_colon(self.time)})")
-            # 상태 변경이 있을 때 액션 재수행 (이륙/착륙 완료 시에만)
+                    # 상태 변경이 있을 때 액션 재수행 (RL 모드가 아닐 때만)
+        if self.scheduler.algorithm != "rl":
             if schedule.status in [FlightStatus.TAKE_OFF, FlightStatus.LANDING]:
                 debug("스케줄 상태 변경 후 액션 재수행")
                 self.do_action()
             # Also re-optimize when flights start taxiing to maintain separation
             elif schedule.status == FlightStatus.TAXI_TO_RUNWAY:
                 debug("Flight started taxiing - re-optimizing for separation")
+                self.do_action()
+            # TAXI_TO_GATE에서 DORMANT로 변경 시에도 재스케줄링
+            elif schedule.status == FlightStatus.DORMANT and prev_status == FlightStatus.TAXI_TO_GATE:
+                debug("Flight returned to DORMANT - re-scheduling")
                 self.do_action()
 
 
@@ -292,7 +311,7 @@ class Simulation:
     def _occupy_runway(self, runway, cooldown=3):
         """활주로 점유"""
         runway.occupied = True
-        runway.next_available_time = self.time + 1 + cooldown
+        runway.next_available_time = max(self.time + 1 + cooldown, runway.next_available_time)
         
     def _restore_default_runway_roles(self):
         """기본 활주로 역할로 복구 - 모든 활주로의 inverted = False"""
@@ -300,30 +319,36 @@ class Simulation:
             runway.inverted = False
 
     def do_action(self):
-        """현재 선택된 알고리즘으로 액션 수행"""
+        """스케줄러 액션 수행"""
         debug("알고리즘 액션 수행")
         
-        # 현재 날씨 예보 정보 가져오기
-        weather_forecast = self.weather.get_forecast_for_action()
-        debug(f"날씨 예보 (현재시간 {self.time}부터 2시간, 5분 간격): {len(weather_forecast)}개 시점")
+        # 날씨 예보 정보 수집
+        forecast_data = self.weather.get_forecast_for_action()
+        debug(f"날씨 예보 (현재시간 {self.time}부터 2시간, 5분 간격): {len(forecast_data)}개 시점")
+        for i, forecast in enumerate(forecast_data[:5]):  # 처음 5개만 출력
+            debug(f"   {forecast['time']}분: 이륙위험 {forecast.get('takeoff_risk', 1.0):.1f}, 착륙위험 {forecast.get('landing_risk', 1.0):.1f}")
         
-        # 예보 정보 일부 출력 (처음 3개 시점)
-        if weather_forecast:
-            for i, forecast in enumerate(weather_forecast[:3]):
-                debug(f"  {forecast['time']}분: 이륙위험 {forecast['takeoff_risk']}, 착륙위험 {forecast['landing_risk']}")
-        
-        # Agent에게 전달할 관측 가능한 이벤트만 필터링
-        observed_events = self.get_observed_events()
-        
-        # 각 활주로의 현재 next_available_time 정보 수집
+        # 활주로 가용성 정보 수집
         runway_availability = {}
         for runway in self.airport.runways:
             runway_availability[runway.name] = runway.next_available_time
         
-        # 현재 스케줄 상태와 관측 가능한 이벤트를 알고리즘에 전달 (즉시 반영)
-        self.scheduler.optimize(self.schedules, self.time, observed_events, weather_forecast, runway_availability)
+        # 스케줄러 실행
+        result = self.scheduler.optimize(
+            self.schedules, 
+            self.time, 
+            runway_availability,
+            forecast_data
+        )
         
-
+        # 즉시 피드백 계산 (학습 모드일 때만)
+        if self.training_mode and self.rl_agent:
+            immediate_reward = self._calculate_immediate_reward()
+            self._store_experience(immediate_reward)
+            debug(f"즉시 피드백: {immediate_reward}")
+        
+        return result
+    
     def handle_events(self):
         # 현재 시간과 일치하는 이벤트 처리
         triggered = [e for e in self.event_queue if e.time == self.time]
@@ -480,6 +505,10 @@ class Simulation:
 
     def _init_landing_announce_events(self):
         for flight in self.landing_flights:
+            # ETA가 None인 경우 기본값 사용
+            if flight.eta is None:
+                flight.eta = 1439  # 23:59를 기본값으로 설정
+            
             noise = int(random.gauss(0, 20))  # 표준편차 20분
             announce_time = max(360, min(1320, flight.eta + noise - 20))  # 0600~2200 범위로 제한
             self.event_queue.append(
@@ -492,55 +521,80 @@ class Simulation:
             )
 
     def _add_delay_loss(self, schedule, actual_time, operation_type):
-        """지연 손실 계산 및 누적 (Logistic decay 기반 score)"""
-        def logistic_decay_score(delay_min, priority):
-            # 중간 priority (32) 기준으로 60분 지연 시 0점이 되도록 설정
-            # PRI_MAX (64)는 32보다 약 1.5배 빠르게 감소하도록 조정
-            
-            # Priority를 0-1 범위로 정규화 (32를 기준으로)
-            normalized_priority = priority / 32.0
-            
-            # Logistic decay 함수: 100점에서 시작해서 지연에 따라 감소
-            # 중간 priority (32) 기준 60분 지연 시 0점
-            decay_rate = 0.1 * normalized_priority  # Priority가 높을수록 빠르게 감소
-            score = 100 / (1 + math.exp(decay_rate * (delay_min - 60)))
-            
-            return score
+        """지연 손실 계산 및 누적 (Priority-weighted delay time)"""
+        # Priority를 0-2 범위로 정규화 (최대 priority 64 기준)
+        normalized_priority = (schedule.priority or 0) / 32.0
         
         match operation_type:
             case "takeoff":
                 original_time = schedule.flight.etd
                 if original_time is None:
                     return  # ETD가 없으면 지연 계산 불가
-                delay = actual_time - original_time
+                
+                # original_time을 분 단위로 변환
+                if isinstance(original_time, str):
+                    if ':' in original_time:
+                        hour, minute = map(int, original_time.split(':'))
+                    else:
+                        hour = int(original_time) // 100
+                        minute = int(original_time) % 100
+                    original_minutes = hour * 60 + minute
+                else:
+                    original_minutes = original_time
+                
+                delay = actual_time - original_minutes
                 if delay > 0:
-                    # Logistic decay 기반 delay score 계산
-                    score = logistic_decay_score(delay, schedule.priority)
-                    self.delay_scores.append(score)
-                    debug(f"이륙 지연 score: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} -> score {score:.1f}")
+                    # Priority-weighted delay loss 계산
+                    delay_loss = normalized_priority * delay
+                    self.delay_scores.append(delay_loss)
+                    debug(f"이륙 지연 loss: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} -> loss {delay_loss:.1f}")
                     
                     # Delay minutes 기록 (통계용)
                     schedule.delay_minutes = delay
+                    
+                    # total_delay_loss에 누적
+                    self.total_delay_loss += delay_loss
+                elif delay < 0:
+                    debug(f"이륙 조기 완료: {schedule.flight.flight_id} {abs(delay)}분 일찍 완료 (지연 없음)")
             case "landing":
                 original_time = schedule.flight.eta
                 if original_time is None:
                     return  # ETA가 없으면 지연 계산 불가
-                delay = actual_time - original_time
+                
+                # original_time을 분 단위로 변환
+                if isinstance(original_time, str):
+                    if ':' in original_time:
+                        hour, minute = map(int, original_time.split(':'))
+                    else:
+                        hour = int(original_time) // 100
+                        minute = int(original_time) % 100
+                    original_minutes = hour * 60 + minute
+                else:
+                    original_minutes = original_time
+                
+                delay = actual_time - original_minutes
                 if delay > 0:
-                    # Logistic decay 기반 delay score 계산
-                    score = logistic_decay_score(delay, schedule.priority)
-                    self.delay_scores.append(score)
-                    debug(f"착륙 지연 score: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} -> score {score:.1f}")
+                    # Priority-weighted delay loss 계산
+                    delay_loss = normalized_priority * delay
+                    self.delay_scores.append(delay_loss)
+                    debug(f"착륙 지연 loss: {schedule.flight.flight_id} {delay}분 지연, priority {schedule.priority} -> loss {delay_loss:.1f}")
                     
                     # Delay minutes 기록 (통계용)
                     schedule.delay_minutes = delay
+                    
+                    # total_delay_loss에 누적
+                    self.total_delay_loss += delay_loss
+                elif delay < 0:
+                    debug(f"착륙 조기 완료: {schedule.flight.flight_id} {abs(delay)}분 일찍 완료 (지연 없음)")
     
     def _add_go_around_loss(self, schedule):
-        """Go-around 손실 계산 및 누적 (priority 고려하지 않음)"""
-        # Priority 고려하지 않고 고정 손실
-        loss = 15 * 100  # 15분 지연, 스케일 조정을 위해 100 곱함
+        """Go-around 손실 계산 및 누적 (Priority-weighted)"""
+        # Priority를 0-2 범위로 정규화 (최대 priority 64 기준)
+        normalized_priority = (schedule.priority or 0) / 32.0
+        # 15분 지연에 priority 가중치 적용
+        loss = normalized_priority * 15
         self.total_delay_loss += loss
-        debug(f"Go-around 손실: {schedule.flight.flight_id} 15분 지연 -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
+        debug(f"Go-around 손실: {schedule.flight.flight_id} priority {schedule.priority} -> {loss:.1f} 손실 추가 (총 {self.total_delay_loss:.1f})")
     
     def _add_safety_loss(self, schedule, operation_type):
         """날씨 기반 safety score 계산 (안전한 비행 시에는 큰 차이 없도록)"""
@@ -638,6 +692,7 @@ class Simulation:
         if runway.occupied and self.time < runway.next_available_time:
             safety_loss += 300.0
             self.safety_loss_breakdown["runway_occupied"] += 300.0
+            self.total_runway_occupied_loss += 300.0
             debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()} (current_time: {self.time}, next_available: {runway.next_available_time})")
         
         # 3. 동시 이착륙 체크
@@ -677,12 +732,13 @@ class Simulation:
     def _add_simultaneous_operation_loss(self, schedule1, schedule2, operation_type):
         """동시 이착륙에 대한 큰 loss 추가"""
         self.total_safety_loss += 500
+        self.total_simultaneous_ops_loss += 500
         self.safety_loss_breakdown["simultaneous_ops"] += 500
         debug("SIMULTANEOUS OPERATION LOSS: 500")
     
     def get_total_loss(self):
         """총 손실 반환"""
-        return self.total_delay_loss + self.total_safety_loss
+        return self.total_delay_loss + self.total_safety_loss + self.total_simultaneous_ops_loss + self.total_runway_occupied_loss
     
     def get_delay_score(self):
         """Delay score (100점 만점)"""
@@ -752,3 +808,157 @@ class Simulation:
         else:
             debug(f"잘못된 속도 설정: {speed}. 가능한 값: 1, 2, 4, 8, 64")
             return False
+
+    def _calculate_immediate_reward(self) -> float:
+        """즉시 피드백 계산 - 활주로 점유 충돌만"""
+        reward = 0.0
+        
+        # 활주로 점유 충돌 체크 (지금까지 배정한 비행 중 같은 시간에 같은 활주로를 사용하는 비행이 있는가?)
+        runway_usage = {}  # {runway_name: {time: flight_id}}
+        
+        for schedule in self.schedules:
+            if schedule.status in [FlightStatus.TAXI_TO_RUNWAY, FlightStatus.WAITING]:
+                if schedule.runway and (schedule.etd or schedule.eta):
+                    time = schedule.etd if schedule.is_takeoff else schedule.eta
+                    runway = schedule.runway
+                    
+                    if runway not in runway_usage:
+                        runway_usage[runway] = {}
+                    
+                    if time in runway_usage[runway]:
+                        # 충돌 발생!
+                        reward -= 10.0
+                        debug(f"활주로 점유 충돌: {runway} {time}분에 {schedule.flight.flight_id}와 {runway_usage[runway][time]} 충돌")
+                    else:
+                        runway_usage[runway][time] = schedule.flight.flight_id
+        
+        return reward
+    
+    def _store_experience(self, immediate_reward: float):
+        """경험 저장 (PPO용)"""
+        if self.rl_agent:
+            # 현재 상태 관찰 (간단한 상태 표현)
+            current_state = self._get_current_state()
+            
+            # 경험 저장
+            self.episode_experiences.append({
+                'state': current_state,
+                'reward': immediate_reward,
+                'time': self.time
+            })
+    
+    def _get_current_state(self) -> np.ndarray:
+        """현재 상태를 상세한 벡터로 표현"""
+        state_features = []
+        
+        # 1. 시간 정보
+        state_features.append(self.time / 1440.0)  # 정규화된 시간
+        
+        # 2. 활주로 상태 (각 활주로별)
+        for runway in self.airport.runways:
+            state_features.extend([
+                1.0 if runway.closed else 0.0,  # 닫힘 여부
+                1.0 if runway.occupied else 0.0,  # 점유 여부
+                runway.next_available_time / 1440.0  # 다음 가용 시간 (정규화)
+            ])
+        
+        # 3. 날씨 예보 정보 (현재 시간부터 2시간, 5분 간격)
+        forecast_data = self.weather.get_forecast_for_action()
+        for i, forecast in enumerate(forecast_data[:24]):  # 처음 24개 시점 (2시간)
+            state_features.extend([
+                forecast.get('takeoff_risk', 1.0),  # 이륙 위험도
+                forecast.get('landing_risk', 1.0)   # 착륙 위험도
+            ])
+        
+        # 4. 스케줄 정보 (최대 20개 스케줄)
+        max_schedules = 20
+        available_schedules = [s for s in self.schedules 
+                              if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
+        
+        for i in range(max_schedules):
+            if i < len(available_schedules):
+                schedule = available_schedules[i]
+                flight = schedule.flight
+                
+                # 스케줄별 상세 정보
+                # FlightStatus를 숫자로 변환
+                status_mapping = {
+                    'dormant': 0.0,
+                    'taxiToRunway': 1.0,
+                    'waiting': 2.0,
+                    'takeOff': 3.0,
+                    'landing': 4.0,
+                    'taxiToGate': 5.0,
+                    'delayed': 6.0,
+                    'cancelled': 7.0
+                }
+                status_value = status_mapping.get(schedule.status.value, 0.0)
+                
+                state_features.extend([
+                    1.0 if schedule.is_takeoff else 0.0,  # 이륙/착륙 구분
+                    (flight.priority or 0) / 10.0,  # 우선순위 (정규화)
+                    flight.etd / 1440.0 if flight.etd else 0.0,  # ETD (정규화)
+                    flight.eta / 1440.0 if flight.eta else 0.0,  # ETA (정규화)
+                    status_value / 10.0  # 상태 (정규화)
+                ])
+            else:
+                # 패딩 (스케줄이 없는 경우)
+                state_features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
+        
+        # 5. 이벤트 정보 (활주로 닫힘, 사고 등)
+        active_events = [e for e in self.event_queue if e.time <= self.time]
+        state_features.append(len(active_events) / 10.0)  # 활성 이벤트 수 (정규화)
+        
+        # 6. 통계 정보
+        state_features.extend([
+            len(self.completed_schedules) / 50.0,  # 완료된 스케줄 수
+            self.cancelled_flights / 10.0,  # 취소된 비행 수
+            self.total_delay_loss / 10000.0,  # 지연 손실 (정규화)
+            self.total_safety_loss / 10000.0  # 안전 손실 (정규화)
+        ])
+        
+        state_array = np.array(state_features)
+        return state_array
+
+    def _end_rl_episode(self, final_reward: float):
+        """RL 에피소드 종료 처리 (PPO용)"""
+        if not self.rl_agent or not self.episode_experiences:
+            return
+        
+        # 마지막 경험에 최종 보상 추가
+        if self.episode_experiences:
+            self.episode_experiences[-1]['reward'] += final_reward
+        
+        # PPO 에이전트에 경험 전달
+        for i, exp in enumerate(self.episode_experiences):
+            # 간단한 액션과 확률 (실제로는 scheduler에서 결정됨)
+            dummy_actions = [0] * 5  # 5개 스케줄에 대한 더미 액션
+            dummy_probs = [0.2] * 5  # 균등 확률
+            
+            self.rl_agent.store_transition(
+                exp['state'], 
+                dummy_actions, 
+                dummy_probs,
+                exp['reward'], 
+                0.0,  # 더미 가치
+                i == len(self.episode_experiences) - 1  # 마지막이면 done=True
+            )
+        
+        # PPO 에이전트 업데이트
+        self.rl_agent.update()
+        
+        # 경험 초기화
+        self.episode_experiences = []
+        self.episode_count += 1
+        
+        debug(f"PPO 에피소드 {self.episode_count} 완료, 최종 보상: {final_reward}")
+    
+    def set_rl_agent(self, agent):
+        """RL 에이전트 설정"""
+        self.rl_agent = agent
+        debug(f"RL 에이전트 설정 완료")
+    
+    def set_training_mode(self, training: bool):
+        """훈련 모드 설정"""
+        self.training_mode = training
+        debug(f"RL 훈련 모드: {training}")

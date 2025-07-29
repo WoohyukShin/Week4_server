@@ -48,8 +48,20 @@ def main():
     end_time = None  # 시뮬레이션에서 자동 결정
 
     use_ws = False  # WebSocket
-    is_training = False  # 강화학습 반복용 (랜덤 시나리오 사용 시 True 권장)
+    is_training = False  # Training 여부 - True면 디버깅 X
+    # RL 모델 사용 설정
+    use_rl = True  # RL 모델 사용 여부
+    train_rl = False  # RL 훈련 여부
 
+    # RL 훈련 실행
+    if train_rl:
+        print("PPO 훈련을 시작합니다...")
+        from train_rl import train_rl_with_real_simulation
+        best_model_path, training_history = train_rl_with_real_simulation(episodes=150)
+        print(f"훈련 완료! 최고 모델: {best_model_path}")
+        return
+
+    # 일반 시뮬레이션 실행 (훈련된 모델 사용)
     if is_training:
         mode = SimulationMode.TRAINING
     elif use_ws:
@@ -58,7 +70,27 @@ def main():
         mode = SimulationMode.HEADLESS
 
     sim = Simulation(airport, schedules, landing_flights, events=events, mode=mode)
+    
+    # 훈련된 RL 모델 사용
+    if use_rl:
+        sim.scheduler.algorithm = "rl"
+        
+        # 특정 모델 파일 지정
+        model_path = "models/ppo_best_second.pth"
+        if os.path.exists(model_path):
+            from rl.agent import PPOAgent
+            # RL 에이전트 초기화 및 모델 로드
+            observation_size = 160
+            action_size = 288
+            rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
+            rl_agent.load_model(model_path)
+            sim.set_rl_agent(rl_agent)
+            print(f"훈련된 RL 모델을 로드했습니다: {model_path}")
+        else:
+            print(f"모델 파일을 찾을 수 없습니다: {model_path}")
+            return
 
+    # 시뮬레이션 실행
     if mode == SimulationMode.INTERACTIVE:
         from sim.ws_server import WebSocketServer
         ws_server = WebSocketServer(sim)

@@ -37,6 +37,7 @@ class EventHandler:
             case "LANDING_ANNOUNCE": # 백에서 flight 보고 랜덤으로 생성한 landing event
                 self._landing_announce(target, duration, current_time)
 
+
     def _emergency_landing(self, flight_id, duration, current_time):
         debug(f"EMERGENCY_LANDING: {flight_id} {duration}분 내 착륙 필요")
         flight = Flight(flight_id, etd=None, eta=current_time + 3, dep_airport=None, arr_airport=None, airline="")
@@ -67,9 +68,9 @@ class EventHandler:
                         return_duration = min(taxi_duration, 10)
                         
                         # 반대 방향의 runway name 저장 (프론트엔드 애니메이션용)
-                        if schedule.runway and schedule.runway.name == r.name:
+                        if schedule.runway and schedule.runway.get_current_direction() == r.name:
                             schedule.opposite_runway_direction = r.inverted_name  # 14L -> 32R
-                        elif schedule.runway and schedule.runway.name == r.inverted_name:
+                        elif schedule.runway and schedule.runway.get_current_direction() == r.inverted_name:
                             schedule.opposite_runway_direction = r.name  # 32R -> 14L
                         else:
                             # If no runway assigned, use default based on operation type
@@ -80,6 +81,13 @@ class EventHandler:
                   
                         schedule.status = FlightStatus.TAXI_TO_GATE
                         schedule.taxi_to_gate_time = current_time - return_duration  # 돌아가는 시간만큼 앞으로 설정
+                        
+                        # etd를 None으로 초기화하여 다시 스케줄링되도록 함
+                        schedule.etd = None
+                        schedule.runway = None
+                        
+                        # TAXI_TO_GATE 완료 후 자동으로 DORMANT로 변경되고 do_action() 호출됨
+                        debug(f"TAXI_TO_GATE 시작: {schedule.flight.flight_id}, 10분 후 DORMANT로 변경 예정")
                     
     def _reopen_runway(self, runway_name):
         debug(f"RUNWAY_REOPEN: {runway_name} 재개방")
@@ -200,3 +208,5 @@ class EventHandler:
                 return "Runway"
             case _:
                 return ""
+
+

@@ -47,21 +47,21 @@ def main():
     start_time = max(360, min_etd - 20)  # 최소 0600, 또는 첫 비행 ETD - 20분
     end_time = None  # 시뮬레이션에서 자동 결정
 
-    use_ws = False  # WebSocket
+    use_ws = True  # WebSocket
     is_training = False  # Training 여부 - True면 디버깅 X
     # RL 모델 사용 설정
     use_rl = False  # RL 모델 사용 여부
     train_rl = False  # RL 훈련 여부
 
-    # RL 훈련 실행
-    if train_rl:
+    # RL 훈련 실행 (only for training mode, not for normal simulation)
+    if is_training and train_rl:
         print("PPO 훈련을 시작합니다...")
         from train_rl import train_rl_with_real_simulation
         best_model_path, training_history = train_rl_with_real_simulation(episodes=150)
         print(f"훈련 완료! 최고 모델: {best_model_path}")
         return
 
-    # 일반 시뮬레이션 실행 (훈련된 모델 사용)
+    # 일반 시뮬레이션 실행
     if is_training:
         mode = SimulationMode.TRAINING
     elif use_ws:
@@ -71,33 +71,18 @@ def main():
 
     sim = Simulation(airport, schedules, landing_flights, events=events, mode=mode)
     
-    # 훈련된 RL 모델 사용
-    if use_rl:
-        sim.scheduler.algorithm = "rl"
-        
-        # 특정 모델 파일 지정
-        model_path = "models/ppo_best_second.pth"
-        if os.path.exists(model_path):
-            from rl.agent import PPOAgent
-            # RL 에이전트 초기화 및 모델 로드
-            observation_size = 160
-            action_size = 288
-            rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
-            rl_agent.load_model(model_path)
-            sim.set_rl_agent(rl_agent)
-            print(f"훈련된 RL 모델을 로드했습니다: {model_path}")
-        else:
-            print(f"모델 파일을 찾을 수 없습니다: {model_path}")
-            return
-
-    # 시뮬레이션 실행
+    # Algorithm selection logic:
+    # - For WebSocket mode: Algorithm will be set by frontend start message
+    # - For non-WebSocket mode: Uses default algorithm from simulation.py (greedy)
+    # - For training mode: Can use RL if needed for training purposes
+    
     if mode == SimulationMode.INTERACTIVE:
+        # WebSocket mode - algorithm will be set by frontend
         from sim.ws_server import WebSocketServer
         ws_server = WebSocketServer(sim)
         ws_thread = threading.Thread(target=ws_server.start, daemon=True)
         ws_thread.start()
         sim.ws = ws_server
-        # Don't start simulation immediately - wait for start message from frontend
         debug("WebSocket server started. Waiting for start message from frontend...")
         # Keep the main thread alive
         try:
@@ -106,6 +91,7 @@ def main():
         except KeyboardInterrupt:
             debug("Shutting down...")
     else:
+        # Non-WebSocket mode - use default algorithm from simulation.py
         sim.start(start_time=start_time)
 
 if __name__ == "__main__":

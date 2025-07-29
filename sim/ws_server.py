@@ -11,6 +11,7 @@ class WebSocketServer:
         self.port = port
         self.clients = set()
         self.loop = None
+        self.simulation_started = False
 
     async def handler(self, websocket, path):
         debug("클라이언트 연결됨")
@@ -20,7 +21,10 @@ class WebSocketServer:
             async for message in websocket:
                 debug(f"프론트에서 메시지 수신: {message}")
                 data = json.loads(message)
-                if data.get("type") == "event":
+                if data.get("type") == "start_simulation":
+                    # 프론트에서 시뮬레이션 시작 요청
+                    await self.handle_start_simulation(data, websocket)
+                elif data.get("type") == "event":
                     # 프론트에서 event 발생 시
                     self.simulation.on_event(data["event"])
                 elif data.get("type") == "speed_control":
@@ -38,6 +42,44 @@ class WebSocketServer:
             debug("클라이언트 연결 종료")
         finally:
             self.clients.remove(websocket)
+
+    async def handle_start_simulation(self, data, websocket):
+        """Handle start simulation message from frontend"""
+        if self.simulation_started:
+            debug("Simulation already started")
+            return
+        
+        algorithm = data.get("algorithm", "greedy")
+        debug(f"Starting simulation with algorithm: {algorithm}")
+        
+        # Set the algorithm in the simulation by creating a new scheduler
+        from sim.scheduler import Scheduler
+        self.simulation.scheduler = Scheduler(algorithm, self.simulation)
+        
+        # Calculate start time
+        schedules = self.simulation.schedules
+        min_etd = min([s.flight.etd for s in schedules]) if schedules else 0
+        start_time = max(360, min_etd - 20)  # 최소 0600, 또는 첫 비행 ETD - 20분
+        
+        # Start the simulation in a separate thread
+        def start_sim():
+            self.simulation.start(start_time=start_time)
+        
+        import threading
+        sim_thread = threading.Thread(target=start_sim, daemon=True)
+        sim_thread.start()
+        
+        self.simulation_started = True
+        
+        # Send confirmation to frontend
+        response = {
+            "type": "start_simulation_response",
+            "success": True,
+            "algorithm": algorithm,
+            "start_time": start_time
+        }
+        await websocket.send(json.dumps(response))
+        debug("Simulation started successfully")
 
     async def send_state_update(self, state):
         if not self.clients:

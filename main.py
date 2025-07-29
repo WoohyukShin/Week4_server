@@ -97,7 +97,14 @@ def main():
         ws_thread = threading.Thread(target=ws_server.start, daemon=True)
         ws_thread.start()
         sim.ws = ws_server
-        sim.start(start_time=start_time)
+        # Don't start simulation immediately - wait for start message from frontend
+        debug("WebSocket server started. Waiting for start message from frontend...")
+        # Keep the main thread alive
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            debug("Shutting down...")
     else:
         sim.start(start_time=start_time)
 

@@ -68,9 +68,9 @@ class EventHandler:
                         return_duration = min(taxi_duration, 10)
                         
                         # 반대 방향의 runway name 저장 (프론트엔드 애니메이션용)
-                        if schedule.runway and schedule.runway.get_current_direction() == r.name:
+                        if schedule.runway is not None and schedule.runway.get_current_direction() == r.name:
                             schedule.opposite_runway_direction = r.inverted_name  # 14L -> 32R
-                        elif schedule.runway and schedule.runway.get_current_direction() == r.inverted_name:
+                        elif schedule.runway is not None and schedule.runway.get_current_direction() == r.inverted_name:
                             schedule.opposite_runway_direction = r.name  # 32R -> 14L
                         else:
                             # If no runway assigned, use default based on operation type

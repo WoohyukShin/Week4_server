@@ -33,6 +33,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
+<<<<<<< HEAD
         self.scheduler = Scheduler("rl", self)  # Use advanced algorithm in scheduler
         
         # RL 관련 속성들
@@ -40,6 +41,9 @@ class Simulation:
         self.training_mode = False  # 학습 모드
         self.episode_experiences = []  # 경험 저장
         self.episode_count = 0  # 에피소드 카운트
+=======
+        self.scheduler = Scheduler("greedy", self)  # Use greedy algorithm by default
+>>>>>>> ab082a5de8d23d1893d2a23dade796832a9602d9
         
         # Speed control
         self.speed = 1  # 1x, 2x, 4x, 8x, 64x
@@ -106,7 +110,7 @@ class Simulation:
             # 완료된 뒤 3 timestep이 지난 스케줄은 schedules에서 제거하고 completed_schedules로 이동
             to_remove = []
             for s in self.schedules:
-                if hasattr(s, 'complete_time') and self.time - s.complete_time >= 3:
+                if hasattr(s, 'complete_time') and self.time - s.complete_time >= 10:
                     self.completed_schedules.append(s)
                     to_remove.append(s)
             for s in to_remove:
@@ -167,8 +171,18 @@ class Simulation:
                     runway.next_available_time = 0
                 else:
                     continue
+            
+            # Track runway occupation status changes
+            was_occupied = runway.occupied
             runway.occupied = runway.next_available_time > self.time
             
+            if was_occupied and not runway.occupied:
+                debug(f"🔄 RUNWAY RELEASED: {runway.get_current_direction()} at time {self.time}")
+                debug(f"   - next_available_time: {runway.next_available_time}")
+            elif not was_occupied and runway.occupied:
+                debug(f"🔄 RUNWAY OCCUPIED: {runway.get_current_direction()} at time {self.time}")
+                debug(f"   - next_available_time: {runway.next_available_time}")
+
         # 스케줄 상태 갱신 및 완료 처리
         for s in self.schedules:
             if not hasattr(s, 'complete_time'):
@@ -310,6 +324,12 @@ class Simulation:
     
     def _occupy_runway(self, runway, cooldown=3):
         """활주로 점유"""
+        debug(f"🔒 OCCUPYING RUNWAY: {runway.get_current_direction()}")
+        debug(f"   - Previous occupied: {runway.occupied}")
+        debug(f"   - Previous next_available_time: {runway.next_available_time}")
+        debug(f"   - Current time: {self.time}")
+        debug(f"   - New next_available_time: {self.time + 1 + cooldown}")
+        
         runway.occupied = True
         runway.next_available_time = max(self.time + 1 + cooldown, runway.next_available_time)
         
@@ -682,18 +702,30 @@ class Simulation:
         runway = schedule.runway
         safety_loss = 0.0
         
+        debug(f"🔍 RUNWAY SAFETY CHECK: {schedule.flight.flight_id} {operation_type} on {runway.get_current_direction()}")
+        debug(f"   - Runway closed: {runway.closed}")
+        debug(f"   - Runway occupied: {runway.occupied}")
+        debug(f"   - Current time: {self.time}")
+        debug(f"   - Next available time: {runway.next_available_time}")
+        debug(f"   - Time until available: {runway.next_available_time - self.time if runway.next_available_time > self.time else 0}")
+        
         # 1. 활주로가 닫혀있는 경우
         if runway.closed:
             safety_loss += 500.0
             self.safety_loss_breakdown["runway_closed"] += 500.0
-            debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using CLOSED runway {runway.get_current_direction()}")
+            debug(f"🚨 RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using CLOSED runway {runway.get_current_direction()}")
         
         # 2. 활주로가 점유된 상태인 경우 (이착륙 시작 시점에 체크)
         if runway.occupied and self.time < runway.next_available_time:
             safety_loss += 300.0
             self.safety_loss_breakdown["runway_occupied"] += 300.0
+<<<<<<< HEAD
             self.total_runway_occupied_loss += 300.0
             debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()} (current_time: {self.time}, next_available: {runway.next_available_time})")
+=======
+            debug(f"🚨 RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()} (current_time: {self.time}, next_available: {runway.next_available_time})")
+            debug(f"   - Total runway_occupied loss so far: {self.safety_loss_breakdown['runway_occupied']}")
+>>>>>>> ab082a5de8d23d1893d2a23dade796832a9602d9
         
         # 3. 동시 이착륙 체크
         self._check_simultaneous_operations(schedule, operation_type)
@@ -704,8 +736,10 @@ class Simulation:
         
         # 이착륙 시작 시점에 활주로 점유 (위험도 체크 후)
         if operation_type == "takeoff":
+            debug(f"🛫 OCCUPYING RUNWAY: {schedule.flight.flight_id} takeoff on {runway.get_current_direction()}")
             self._occupy_runway(runway, cooldown=3)
         else:  # landing
+            debug(f"🛬 OCCUPYING RUNWAY: {schedule.flight.flight_id} landing on {runway.get_current_direction()}")
             self._occupy_runway(runway, cooldown=3)
     
     def _check_simultaneous_operations(self, schedule, operation_type):

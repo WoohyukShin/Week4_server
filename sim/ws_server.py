@@ -65,7 +65,7 @@ class WebSocketServer:
                 # RL 에이전트 초기화 및 모델 로드
                 observation_size = 160
                 action_size = 288
-                rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
+                rl_agent = PPOAgent(observation_size=283, action_size=action_size)
                 rl_agent.load_model(model_path)
                 self.simulation.set_rl_agent(rl_agent)
                 debug(f"훈련된 RL 모델을 로드했습니다: {model_path}")

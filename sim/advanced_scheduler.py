@@ -152,7 +152,7 @@ class AdvancedScheduler:
                 weather_data = forecast[time_step]
             else:
                 # Use current weather if no forecast available
-                weather_data = self.sim.weather.get_weather_info()
+                weather_data = self.sim.weather.get_weather_data()
             
             # Calculate landing risk
             landing_risk = 1.0

@@ -33,7 +33,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("rl", self)  # Use advanced algorithm in scheduler
+        self.scheduler = Scheduler("advanced", self)  # Use advanced algorithm in scheduler
         
         # RL 관련 속성들
         self.rl_agent = None  # RL 에이전트
@@ -217,10 +217,6 @@ class Simulation:
                         debug(f"{schedule.flight.flight_id} TAXIING TO RUNWAY {runway_direction}")
                         schedule.status = FlightStatus.TAXI_TO_RUNWAY
                         schedule.start_taxi_time = self.time
-                        
-                        # Re-optimize to ensure proper separation for remaining flights
-                        debug("Flight started taxiing - re-optimizing for separation")
-                        self.do_action()
             case FlightStatus.TAXI_TO_RUNWAY:
                 # 실제 배정된 시간(ETD)에 이륙 (알고리즘이 이미 결정했으므로 강제 실행)
                 if schedule.is_takeoff and schedule.etd is not None and self.time >= schedule.etd:
@@ -287,16 +283,7 @@ class Simulation:
         if schedule.status != prev_status:
             debug(f"{f.flight_id} : {prev_status.value} → {schedule.status.value} (time={int_to_hhmm_colon(self.time)})")
                     # 상태 변경이 있을 때 액션 재수행 (RL 모드가 아닐 때만)
-        if self.scheduler.algorithm != "rl":
-            if schedule.status in [FlightStatus.TAKE_OFF, FlightStatus.LANDING]:
-                debug("스케줄 상태 변경 후 액션 재수행")
-                self.do_action()
-            # Also re-optimize when flights start taxiing to maintain separation
-            elif schedule.status == FlightStatus.TAXI_TO_RUNWAY:
-                debug("Flight started taxiing - re-optimizing for separation")
-                self.do_action()
-            # TAXI_TO_GATE에서 DORMANT로 변경 시에도 재스케줄링
-            elif schedule.status == FlightStatus.DORMANT and prev_status == FlightStatus.TAXI_TO_GATE:
+        if schedule.status == FlightStatus.DORMANT and prev_status == FlightStatus.TAXI_TO_GATE:
                 debug("Flight returned to DORMANT - re-scheduling")
                 self.do_action()
 
@@ -349,13 +336,11 @@ class Simulation:
         for runway in self.airport.runways:
             runway_availability[runway.name] = runway.next_available_time
         
+        # 관찰 가능한 이벤트 정보 수집 (Runway Closure만)
+        observed_events = self.get_observed_events()
+        
         # 스케줄러 실행
-        result = self.scheduler.optimize(
-            self.schedules, 
-            self.time, 
-            runway_availability,
-            forecast_data
-        )
+        result = self.scheduler.optimize(self.schedules, self.time, observed_events, runway_availability, forecast_data)
         
         # 즉시 피드백 계산 (학습 모드일 때만)
         if self.training_mode and self.rl_agent:
@@ -521,10 +506,7 @@ class Simulation:
 
     def _init_landing_announce_events(self):
         for flight in self.landing_flights:
-            # ETA가 None인 경우 기본값 사용
-            if flight.eta is None:
-                flight.eta = 1439  # 23:59를 기본값으로 설정
-            
+        
             noise = int(random.gauss(0, 20))  # 표준편차 20분
             announce_time = max(360, min(1320, flight.eta + noise - 20))  # 0600~2200 범위로 제한
             self.event_queue.append(
@@ -879,24 +861,23 @@ class Simulation:
         # 1. 시간 정보
         state_features.append(self.time / 1440.0)  # 정규화된 시간
         
-        # 2. 활주로 상태 (각 활주로별)
+        # 2. 활주로 상태 (2개 활주로: 14L, 14R)
         for runway in self.airport.runways:
             state_features.extend([
                 1.0 if runway.closed else 0.0,  # 닫힘 여부
-                1.0 if runway.occupied else 0.0,  # 점유 여부
-                runway.next_available_time / 1440.0  # 다음 가용 시간 (정규화)
+                1.0 if runway.occupied else 0.0   # 점유 여부
             ])
         
         # 3. 날씨 예보 정보 (현재 시간부터 2시간, 5분 간격)
-        forecast_data = self.weather.get_forecast_for_action()
+        forecast_data = self.weather._generate_forecast(self.time)
         for i, forecast in enumerate(forecast_data[:24]):  # 처음 24개 시점 (2시간)
             state_features.extend([
                 forecast.get('takeoff_risk', 1.0),  # 이륙 위험도
                 forecast.get('landing_risk', 1.0)   # 착륙 위험도
             ])
         
-        # 4. 스케줄 정보 (최대 20개 스케줄)
-        max_schedules = 20
+        # 4. 스케줄 정보 (최대 50개 스케줄, 패딩 포함)
+        max_schedules = 50
         available_schedules = [s for s in self.schedules 
                               if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
         
@@ -905,42 +886,32 @@ class Simulation:
                 schedule = available_schedules[i]
                 flight = schedule.flight
                 
-                # 스케줄별 상세 정보
-                # FlightStatus를 숫자로 변환
-                status_mapping = {
-                    'dormant': 0.0,
-                    'taxiToRunway': 1.0,
-                    'waiting': 2.0,
-                    'takeOff': 3.0,
-                    'landing': 4.0,
-                    'taxiToGate': 5.0,
-                    'delayed': 6.0,
-                    'cancelled': 7.0
-                }
-                status_value = status_mapping.get(schedule.status.value, 0.0)
-                
                 state_features.extend([
                     1.0 if schedule.is_takeoff else 0.0,  # 이륙/착륙 구분
-                    (flight.priority or 0) / 10.0,  # 우선순위 (정규화)
+                    (flight.priority or 0) / 32.0,  # 우선순위 (정규화)
                     flight.etd / 1440.0 if flight.etd else 0.0,  # ETD (정규화)
-                    flight.eta / 1440.0 if flight.eta else 0.0,  # ETA (정규화)
-                    status_value / 10.0  # 상태 (정규화)
+                    flight.eta / 1440.0 if flight.eta else 0.0   # ETA (정규화)
                 ])
             else:
                 # 패딩 (스케줄이 없는 경우)
-                state_features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
+                state_features.extend([0.0, 0.0, 0.0, 0.0])
         
-        # 5. 이벤트 정보 (활주로 닫힘, 사고 등)
-        active_events = [e for e in self.event_queue if e.time <= self.time]
-        state_features.append(len(active_events) / 10.0)  # 활성 이벤트 수 (정규화)
+        # 5. 이벤트 정보 (Runway Closure 이벤트만, 상세 정보 포함)
+        observed_events = self.get_observed_events()  # Runway Closure 이벤트만
+        max_events = 10
         
-        # 6. 통계 정보
-        state_features.extend([
-            len(self.completed_schedules) / 50.0,  # 완료된 스케줄 수
-            self.cancelled_flights / 10.0,  # 취소된 비행 수
-            self.total_delay_loss / 10000.0,  # 지연 손실 (정규화)
-            self.total_safety_loss / 10000.0  # 안전 손실 (정규화)
-        ])
+        for i in range(max_events):
+            if i < len(observed_events):
+                event = observed_events[i]
+                # 이벤트 상세 정보: 시간, 지속시간, 14L/14R 대상 여부
+                state_features.extend([
+                    event.time / 1440.0,  # 이벤트 시간 (정규화)
+                    event.duration / 60.0,  # 지속시간 (분 단위, 정규화)
+                    1.0 if event.target in ["14L", "14R"] else 0.0  # 14L/14R 대상 여부
+                ])
+            else:
+                # 패딩 (이벤트가 없는 경우)
+                state_features.extend([0.0, 0.0, 0.0])
         
         state_array = np.array(state_features)
         return state_array

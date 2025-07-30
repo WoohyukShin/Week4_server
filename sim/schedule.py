@@ -16,8 +16,8 @@ class Schedule:
         self.status = FlightStatus.DORMANT
         self.start_taxi_time = None
         # 최대 시간으로 초기화 (배정 전까지 택시 시작 방지)
-        self.etd = 1439
-        self.eta = 1439
+        self.etd = flight.etd
+        self.eta = flight.eta
         self.atd = None
         self.is_takeoff = is_takeoff
         self.landing_time = None

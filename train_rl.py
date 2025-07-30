@@ -24,7 +24,7 @@ try:
     import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
 
-    plt.rcParams['font.family'] = ['DejaVu Sans', 'Malgun Gothic', 'NanumGothic', 'AppleGothic']
+    plt.rcParams['font.family'] = ['DejaVu Sans', 'Malgun Gothic', 'NanumGothic']
     plt.rcParams['axes.unicode_minus'] = False  # 마이너스 기호 깨짐 방지
     
     try:
@@ -42,8 +42,8 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
     set_training_mode(True)
     
     # RL 에이전트 초기화
-    # 상태 크기 계산: 1(시간) + 2*3(활주로) + 24*2(날씨) + 20*5(스케줄) + 1(이벤트) + 4(통계) = 1 + 6 + 48 + 100 + 1 + 4 = 160
-    observation_size = 160
+    # 상태 크기 계산: 1(시간) + 2*2(활주로) + 24*2(날씨) + 50*4(스케줄) + 10*3(이벤트) = 1 + 4 + 48 + 200 + 30 = 283
+    observation_size = 283
     action_size = 288  # 2개 활주로 × 144개 시간 선택
     rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
     
@@ -75,7 +75,7 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
         
         # 새로운 시나리오 생성
         airport = create_rkss_airport()
-        scenario_dict = generate_random_scenario(num_flights=25, num_events=5)
+        scenario_dict = generate_random_scenario(num_flights=50, num_events=10)
         schedules, landing_flights, events = load_scenario_from_dict(scenario_dict)
         
         # 시뮬레이션 생성
@@ -150,8 +150,7 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
         if final_reward > best_reward:
             best_reward = final_reward
             no_improvement_count = 0  # 개선됨
-            timestamp = int(time.time())
-            best_model_path = f"models/ppo_best_{timestamp}.pth"
+            best_model_path = "models/ppo_best.pth"
             
             # 모델 저장
             os.makedirs("models", exist_ok=True)

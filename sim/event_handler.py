@@ -81,13 +81,6 @@ class EventHandler:
                   
                         schedule.status = FlightStatus.TAXI_TO_GATE
                         schedule.taxi_to_gate_time = current_time - return_duration  # 돌아가는 시간만큼 앞으로 설정
-                        
-                        # etd를 None으로 초기화하여 다시 스케줄링되도록 함
-                        schedule.etd = None
-                        schedule.runway = None
-                        
-                        # TAXI_TO_GATE 완료 후 자동으로 DORMANT로 변경되고 do_action() 호출됨
-                        debug(f"TAXI_TO_GATE 시작: {schedule.flight.flight_id}, 10분 후 DORMANT로 변경 예정")
                     
     def _reopen_runway(self, runway_name):
         debug(f"RUNWAY_REOPEN: {runway_name} 재개방")

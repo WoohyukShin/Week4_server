@@ -269,19 +269,19 @@ class Weather:
         
         debug(f"Weather condition changed to: {self.condition.value}")
     
+
     def get_weather_data(self):
-        """현재 날씨 데이터 반환"""
+        """현재 날씨 정보 반환 (Agent용)"""
         return {
-            "condition": self.condition,
-            "visibility": self.visibility,
-            "wind_speed": self.wind_speed,
+            "landing_risk": round(self.landing_risk_multiplier, 2),
+            "takeoff_risk": round(self.takeoff_risk_multiplier, 2),
             "forecast": self.forecast
         }
-    
+
     def get_forecast_for_action(self):
         """DO_ACTION용 날씨 예보 반환 (간단한 리스트 형식)"""
         return self.forecast  # [[TIME, TAKEOFF_RISK, LANDING_RISK], ...]
-    
+
     def get_detailed_weather_info(self):
         """상세 날씨 정보 반환 (프론트엔드용)"""
         return {

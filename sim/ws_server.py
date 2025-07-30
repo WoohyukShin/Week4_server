@@ -60,14 +60,31 @@ class WebSocketServer:
             import os
             model_path = "models/ppo_best_second.pth"
             if os.path.exists(model_path):
-                from rl.agent import PPOAgent
-                # RL 에이전트 초기화 및 모델 로드
-                observation_size = 160
-                action_size = 288
-                rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
-                rl_agent.load_model(model_path)
-                self.simulation.set_rl_agent(rl_agent)
-                debug(f"훈련된 RL 모델을 로드했습니다: {model_path}")
+                try:
+                    from rl.agent import PPOAgent
+                    from rl.environment import AirportEnvironment
+                    
+                    # Create environment to get correct sizes
+                    rl_env = AirportEnvironment(self.simulation)
+                    observation_size = rl_env.observation_space_size
+                    action_size = rl_env.action_space_size
+                    
+                    # RL 에이전트 초기화 및 모델 로드
+                    rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
+                    rl_agent.load_model(model_path)
+                    self.simulation.set_rl_agent(rl_agent)
+                    debug(f"훈련된 RL 모델을 로드했습니다: {model_path}")
+                    debug(f"Observation size: {observation_size}, Action size: {action_size}")
+                except Exception as e:
+                    debug(f"RL 모델 로드 중 오류 발생: {e}")
+                    # Send error response to frontend
+                    response = {
+                        "type": "start_simulation_response",
+                        "success": False,
+                        "error": f"Failed to load RL model: {str(e)}"
+                    }
+                    await websocket.send(json.dumps(response))
+                    return
             else:
                 debug(f"모델 파일을 찾을 수 없습니다: {model_path}")
                 # Send error response to frontend

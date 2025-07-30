@@ -33,7 +33,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("rl", self)  # Use greedy algorithm by default
+        self.scheduler = Scheduler("advanced", self)  # Use greedy algorithm by default
 
         self.rl_agent = None  # RL 에이전트
         self.training_mode = False  # 학습 모드
@@ -350,7 +350,13 @@ class Simulation:
             runway_availability[runway.name] = runway.next_available_time
         
         # 현재 스케줄 상태와 관측 가능한 이벤트를 알고리즘에 전달 (즉시 반영)
-        self.scheduler.optimize(self.schedules, self.time, observed_events, weather_forecast, runway_availability)
+        self.scheduler.optimize(
+            self.schedules, 
+            self.time, 
+            event_queue=observed_events, 
+            forecast=weather_forecast, 
+            runway_availability=runway_availability
+        )
         
         if self.training_mode and self.rl_agent:
             immediate_reward = self._calculate_immediate_reward()
@@ -797,7 +803,17 @@ class Simulation:
             debug(f"잘못된 속도 설정: {speed}. 가능한 값: 1, 2, 4, 8, 64")
             return False
 
-def _calculate_immediate_reward(self) -> float:
+    def set_rl_agent(self, agent):
+        """RL 에이전트 설정"""
+        self.rl_agent = agent
+        debug(f"RL 에이전트 설정 완료")
+
+    def set_training_mode(self, training: bool):
+        """훈련 모드 설정"""
+        self.training_mode = training
+        debug(f"RL 훈련 모드: {training}")
+    
+    def _calculate_immediate_reward(self) -> float:
         """즉시 피드백 계산 - 활주로 점유 충돌만"""
         reward = 0.0
         
@@ -822,131 +838,121 @@ def _calculate_immediate_reward(self) -> float:
         
         return reward
     
-def _store_experience(self, immediate_reward: float):
-    """경험 저장 (PPO용)"""
-    if self.rl_agent:
-        # 현재 상태 관찰 (간단한 상태 표현)
-        current_state = self._get_current_state()
-        
-        # 경험 저장
-        self.episode_experiences.append({
-            'state': current_state,
-            'reward': immediate_reward,
-            'time': self.time
-        })
+    def _store_experience(self, immediate_reward: float):
+        """경험 저장 (PPO용)"""
+        if self.rl_agent:
+            # 현재 상태 관찰 (간단한 상태 표현)
+            current_state = self._get_current_state()
+            
+            # 경험 저장
+            self.episode_experiences.append({
+                'state': current_state,
+                'reward': immediate_reward,
+                'time': self.time
+            })
 
-def _get_current_state(self) -> np.ndarray:
-    """현재 상태를 상세한 벡터로 표현"""
-    state_features = []
-    
-    # 1. 시간 정보
-    state_features.append(self.time / 1440.0)  # 정규화된 시간
-    
-    # 2. 활주로 상태 (각 활주로별)
-    for runway in self.airport.runways:
-        state_features.extend([
-            1.0 if runway.closed else 0.0,  # 닫힘 여부
-            1.0 if runway.occupied else 0.0,  # 점유 여부
-            runway.next_available_time / 1440.0  # 다음 가용 시간 (정규화)
-        ])
-    
-    # 3. 날씨 예보 정보 (현재 시간부터 2시간, 5분 간격)
-    weather_forecast = self.weather.get_forecast_for_action()
-    for i, forecast in enumerate(weather_forecast[:24]):  # 처음 24개 시점 (2시간)
-        state_features.extend([
-            forecast.get('takeoff_risk', 1.0),  # 이륙 위험도
-            forecast.get('landing_risk', 1.0)   # 착륙 위험도
-        ])
-    
-    # 4. 스케줄 정보 (최대 20개 스케줄)
-    max_schedules = 20
-    available_schedules = [s for s in self.schedules 
-                            if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
-    
-    for i in range(max_schedules):
-        if i < len(available_schedules):
-            schedule = available_schedules[i]
-            flight = schedule.flight
-            
-            # 스케줄별 상세 정보
-            # FlightStatus를 숫자로 변환
-            status_mapping = {
-                'dormant': 0.0,
-                'taxiToRunway': 1.0,
-                'waiting': 2.0,
-                'takeOff': 3.0,
-                'landing': 4.0,
-                'taxiToGate': 5.0,
-                'delayed': 6.0,
-                'cancelled': 7.0
-            }
-            status_value = status_mapping.get(schedule.status.value, 0.0)
-            
+    def _get_current_state(self) -> np.ndarray:
+        """현재 상태를 상세한 벡터로 표현"""
+        state_features = []
+        
+        # 1. 시간 정보
+        state_features.append(self.time / 1440.0)  # 정규화된 시간
+        
+        # 2. 활주로 상태 (각 활주로별)
+        for runway in self.airport.runways:
             state_features.extend([
-                1.0 if schedule.is_takeoff else 0.0,  # 이륙/착륙 구분
-                (flight.priority or 0) / 10.0,  # 우선순위 (정규화)
-                flight.etd / 1440.0 if flight.etd else 0.0,  # ETD (정규화)
-                flight.eta / 1440.0 if flight.eta else 0.0,  # ETA (정규화)
-                status_value / 10.0  # 상태 (정규화)
+                1.0 if runway.closed else 0.0,  # 닫힘 여부
+                1.0 if runway.occupied else 0.0,  # 점유 여부
+                runway.next_available_time / 1440.0  # 다음 가용 시간 (정규화)
             ])
-        else:
-            # 패딩 (스케줄이 없는 경우)
-            state_features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
-    
-    # 5. 이벤트 정보 (활주로 닫힘, 사고 등)
-    active_events = [e for e in self.event_queue if e.time <= self.time]
-    state_features.append(len(active_events) / 10.0)  # 활성 이벤트 수 (정규화)
-    
-    # 6. 통계 정보
-    state_features.extend([
-        len(self.completed_schedules) / 50.0,  # 완료된 스케줄 수
-        self.cancelled_flights / 10.0,  # 취소된 비행 수
-        self.total_delay_loss / 10000.0,  # 지연 손실 (정규화)
-        self.total_safety_loss / 10000.0  # 안전 손실 (정규화)
-    ])
-    
-    state_array = np.array(state_features)
-    return state_array
-
-def _end_rl_episode(self, final_reward: float):
-    """RL 에피소드 종료 처리 (PPO용)"""
-    if not self.rl_agent or not self.episode_experiences:
-        return
-    
-    # 마지막 경험에 최종 보상 추가
-    if self.episode_experiences:
-        self.episode_experiences[-1]['reward'] += final_reward
-    
-    # PPO 에이전트에 경험 전달
-    for i, exp in enumerate(self.episode_experiences):
-        # 간단한 액션과 확률 (실제로는 scheduler에서 결정됨)
-        dummy_actions = [0] * 5  # 5개 스케줄에 대한 더미 액션
-        dummy_probs = [0.2] * 5  # 균등 확률
         
-        self.rl_agent.store_transition(
-            exp['state'], 
-            dummy_actions, 
-            dummy_probs,
-            exp['reward'], 
-            0.0,  # 더미 가치
-            i == len(self.episode_experiences) - 1  # 마지막이면 done=True
-        )
-    
-    # PPO 에이전트 업데이트
-    self.rl_agent.update()
-    
-    # 경험 초기화
-    self.episode_experiences = []
-    self.episode_count += 1
-    
-    debug(f"PPO 에피소드 {self.episode_count} 완료, 최종 보상: {final_reward}")
+        # 3. 날씨 예보 정보 (현재 시간부터 2시간, 5분 간격)
+        weather_forecast = self.weather.get_forecast_for_action()
+        for i, forecast in enumerate(weather_forecast[:24]):  # 처음 24개 시점 (2시간)
+            state_features.extend([
+                forecast.get('takeoff_risk', 1.0),  # 이륙 위험도
+                forecast.get('landing_risk', 1.0)   # 착륙 위험도
+            ])
+        
+        # 4. 스케줄 정보 (최대 20개 스케줄)
+        max_schedules = 20
+        available_schedules = [s for s in self.schedules 
+                                if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
+        
+        for i in range(max_schedules):
+            if i < len(available_schedules):
+                schedule = available_schedules[i]
+                flight = schedule.flight
+                
+                # 스케줄별 상세 정보
+                # FlightStatus를 숫자로 변환
+                status_mapping = {
+                    'dormant': 0.0,
+                    'taxiToRunway': 1.0,
+                    'waiting': 2.0,
+                    'takeOff': 3.0,
+                    'landing': 4.0,
+                    'taxiToGate': 5.0,
+                    'delayed': 6.0,
+                    'cancelled': 7.0
+                }
+                status_value = status_mapping.get(schedule.status.value, 0.0)
+                
+                state_features.extend([
+                    1.0 if schedule.is_takeoff else 0.0,  # 이륙/착륙 구분
+                    (flight.priority or 0) / 10.0,  # 우선순위 (정규화)
+                    flight.etd / 1440.0 if flight.etd else 0.0,  # ETD (정규화)
+                    flight.eta / 1440.0 if flight.eta else 0.0,  # ETA (정규화)
+                    status_value / 10.0  # 상태 (정규화)
+                ])
+            else:
+                # 패딩 (스케줄이 없는 경우)
+                state_features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
+        
+        # 5. 이벤트 정보 (활주로 닫힘, 사고 등)
+        active_events = [e for e in self.event_queue if e.time <= self.time]
+        state_features.append(len(active_events) / 10.0)  # 활성 이벤트 수 (정규화)
+        
+        # 6. 통계 정보
+        state_features.extend([
+            len(self.completed_schedules) / 50.0,  # 완료된 스케줄 수
+            self.cancelled_flights / 10.0,  # 취소된 비행 수
+            self.total_delay_loss / 10000.0,  # 지연 손실 (정규화)
+            self.total_safety_loss / 10000.0  # 안전 손실 (정규화)
+        ])
+        
+        state_array = np.array(state_features)
+        return state_array
 
-def set_rl_agent(self, agent):
-    """RL 에이전트 설정"""
-    self.rl_agent = agent
-    debug(f"RL 에이전트 설정 완료")
-
-def set_training_mode(self, training: bool):
-    """훈련 모드 설정"""
-    self.training_mode = training
-    debug(f"RL 훈련 모드: {training}")
+    def _end_rl_episode(self, final_reward: float):
+        """RL 에피소드 종료 처리 (PPO용)"""
+        if not self.rl_agent or not self.episode_experiences:
+            return
+        
+        # 마지막 경험에 최종 보상 추가
+        if self.episode_experiences:
+            self.episode_experiences[-1]['reward'] += final_reward
+        
+        # PPO 에이전트에 경험 전달
+        for i, exp in enumerate(self.episode_experiences):
+            # 간단한 액션과 확률 (실제로는 scheduler에서 결정됨)
+            dummy_actions = [0] * 5  # 5개 스케줄에 대한 더미 액션
+            dummy_probs = [0.2] * 5  # 균등 확률
+            
+            self.rl_agent.store_transition(
+                exp['state'], 
+                dummy_actions, 
+                dummy_probs,
+                exp['reward'], 
+                0.0,  # 더미 가치
+                i == len(self.episode_experiences) - 1  # 마지막이면 done=True
+            )
+        
+        # PPO 에이전트 업데이트
+        self.rl_agent.update()
+        
+        # 경험 초기화
+        self.episode_experiences = []
+        self.episode_count += 1
+        
+        debug(f"PPO 에피소드 {self.episode_count} 완료, 최종 보상: {final_reward}")

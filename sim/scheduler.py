@@ -20,7 +20,7 @@ class Scheduler:
             case "rl":
                 result = self.rl(schedules, current_time, event_queue, forecast, runway_availability)
             case _:
-                self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
+                result = self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
         
         # Apply optimized times to schedules
         if result:
@@ -287,54 +287,78 @@ class Scheduler:
         return result
     
     def rl(self, schedules, current_time, event_queue, forecast, runway_availability):
-        """RL 알고리즘"""
-        from rl.environment import AirportEnvironment
-        from rl.agent import PPOAgent
-        import os
+        """RL 알고리즘 - Using trained PPO agent"""
+        debug("RL algorithm started")
         
-        if not hasattr(self, 'rl_env'):
-            self.rl_env = AirportEnvironment(self.sim)
-            self.rl_agent = PPOAgent(
-                observation_size=self.rl_env.observation_space_size,
-                action_size=self.rl_env.action_space_size
-            )
-            model_path = "models/ppo_airport.pth"
-            if os.path.exists(model_path):
-                try:
-                    self.rl_agent.load_model(model_path)
-                    debug(f"학습된 RL 모델을 {model_path}에서 로드했습니다")
-                except Exception as e:
-                    debug(f"RL 모델 로드 실패: {e}")
-
-        state = self.rl_env._get_observation()
-        available_schedules = [s for s in schedules if s.status in [0, 1]] # DORMANT, WAITING
-        num_schedules = len(available_schedules)
-
-        if num_schedules == 0:
-            debug("RL: 배정 가능한 스케줄이 없습니다")
-            return {}
-
-        actions, action_probs, value = self.rl_agent.select_action(state, num_schedules)
-
-        total_reward = 0.0
-        assigned_count = 0
-
-        for i, schedule in enumerate(available_schedules):
-            if i < len(actions):
-                action = actions[i]
-                reward = self.rl_env._apply_single_schedule_action(schedule, action)
-                total_reward += reward
-
-                if reward > 0: # 성공적인 배정
-                    assigned_count += 1
-
-        debug(f"RL 액션 적용 완료: {assigned_count}/{num_schedules} 비행 배정, 총 보상: {total_reward:.2f}")
-
-        return {
-            "algorithm": "rl",
-            "assigned_count": assigned_count,
-            "total_reward": total_reward
-        }
+        try:
+            from rl.environment import AirportEnvironment
+            from rl.agent import PPOAgent
+            import os
+            
+            # Initialize RL environment and agent if not already done
+            if not hasattr(self, 'rl_env'):
+                self.rl_env = AirportEnvironment(self.sim)
+                self.rl_agent = PPOAgent(
+                    observation_size=self.rl_env.observation_space_size,
+                    action_size=self.rl_env.action_space_size
+                )
+                
+                # Load trained model
+                model_path = "models/ppo_best_second.pth"
+                if os.path.exists(model_path):
+                    try:
+                        self.rl_agent.load_model(model_path)
+                        debug(f"학습된 RL 모델을 {model_path}에서 로드했습니다")
+                    except Exception as e:
+                        debug(f"RL 모델 로드 실패: {e}")
+                        debug("Greedy 알고리즘으로 fallback합니다")
+                        return self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
+                else:
+                    debug(f"RL 모델 파일을 찾을 수 없음: {model_path}")
+                    debug("Greedy 알고리즘으로 fallback합니다")
+                    return self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
+            
+            # Get current state observation
+            state = self.rl_env._get_observation()
+            
+            # Get available schedules for RL
+            available_schedules = [s for s in schedules if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
+            num_schedules = len(available_schedules)
+            
+            if num_schedules == 0:
+                debug("RL: 배정 가능한 스케줄이 없습니다")
+                return {}
+            
+            # Select actions using RL agent
+            actions, action_probs, value = self.rl_agent.select_action(state, num_schedules)
+            
+            total_reward = 0.0
+            assigned_count = 0
+            result = {}
+            
+            # Apply actions to schedules
+            for i, schedule in enumerate(available_schedules):
+                if i < len(actions):
+                    action = actions[i]
+                    reward = self.rl_env._apply_single_schedule_action(schedule, action)
+                    total_reward += reward
+                    
+                    if reward > 0:  # Successful assignment
+                        assigned_count += 1
+                        # Add to result for consistency with other algorithms
+                        if schedule.is_takeoff and schedule.etd is not None:
+                            result[schedule.flight.flight_id] = schedule.etd
+                        elif not schedule.is_takeoff and schedule.eta is not None:
+                            result[schedule.flight.flight_id] = schedule.eta
+            
+            debug(f"RL 액션 적용 완료: {assigned_count}/{num_schedules} 비행 배정, 총 보상: {total_reward:.2f}")
+            
+            return result
+            
+        except Exception as e:
+            debug(f"RL 알고리즘 실행 중 오류 발생: {e}")
+            debug("Greedy 알고리즘으로 fallback합니다")
+            return self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
     
     def _apply_rl_scheduling_action(self, action, schedules, current_time, event_queue, runway_availability):
         """RL 액션을 실제 스케줄링 결정으로 적용 - 환경과 동일한 로직"""
@@ -344,22 +368,17 @@ class Scheduler:
         if not pending_schedules:
             return False
         
-        # 액션 해석: 스케줄 선택 + 활주로 선택 + 시간 선택
-        num_schedules = len(pending_schedules)
-        schedule_idx = action % num_schedules
-        remaining_action = action // num_schedules
+        # 액션 해석: [runway_choice, time_choice, operation_type]
+        runway_choice = (action // 6) % 3  # 0: 14L, 1: 14R, 2: wait
+        time_choice = action % 6  # 0: -2, 1: -1, 2: 0, 3: +1, 4: +2, 5: go_around
+        operation_type = (action // 18) % 2  # 0: takeoff, 1: landing
         
-        if schedule_idx >= num_schedules:
-            return False
+        # Use the first pending schedule (the environment will handle multiple schedules)
+        schedule = pending_schedules[0]
         
-        schedule = pending_schedules[schedule_idx]
-        
-        # 활주로 선택 (0: 14L, 1: 14R, 2: 대기)
-        runway_choice = remaining_action % 3
-        remaining_action = remaining_action // 3
-        
-        # 시간 선택 (0: -2, 1: -1, 2: 0, 3: +1, 4: +2, 5: go_around)
-        time_choice = remaining_action % 6
+        # Check if operation type matches schedule type
+        if (operation_type == 0 and not schedule.is_takeoff) or (operation_type == 1 and schedule.is_takeoff):
+            return False  # Operation type mismatch
         
         # 활주로 가용성 확인
         runway_usage = {}

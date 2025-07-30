@@ -282,8 +282,18 @@ class Simulation:
         
         if schedule.status != prev_status:
             debug(f"{f.flight_id} : {prev_status.value} → {schedule.status.value} (time={int_to_hhmm_colon(self.time)})")
-                    # 상태 변경이 있을 때 액션 재수행 (RL 모드가 아닐 때만)
-        if schedule.status == FlightStatus.DORMANT and prev_status == FlightStatus.TAXI_TO_GATE:
+        
+        # 상태 변경이 있을 때 액션 재수행 (RL 모드가 아닐 때만) #방금 수정함
+        if self.scheduler.algorithm != "rl":
+            if schedule.status in [FlightStatus.TAKE_OFF, FlightStatus.LANDING]:
+                debug("스케줄 상태 변경 후 액션 재수행")
+                self.do_action()
+            # Also re-optimize when flights start taxiing to maintain separation
+            elif schedule.status == FlightStatus.TAXI_TO_RUNWAY:
+                debug("Flight started taxiing - re-optimizing for separation")
+                self.do_action()
+            # TAXI_TO_GATE에서 DORMANT로 변경 시에도 재스케줄링
+            elif schedule.status == FlightStatus.DORMANT and prev_status == FlightStatus.TAXI_TO_GATE:
                 debug("Flight returned to DORMANT - re-scheduling")
                 self.do_action()
 
@@ -695,7 +705,7 @@ class Simulation:
         
         # 2. 활주로가 점유된 상태인 경우 (이착륙 시작 시점에 체크)
         if runway.occupied and self.time < runway.next_available_time:
-            safety_loss += 300.0
+            # safety_loss에는 추가하지 않고 별도로만 관리 (중복 방지)
             self.safety_loss_breakdown["runway_occupied"] += 300.0
             self.total_runway_occupied_loss += 300.0
             debug(f"RUNWAY SAFETY LOSS: {schedule.flight.flight_id} using OCCUPIED runway {runway.get_current_direction()} (current_time: {self.time}, next_available: {runway.next_available_time})")
@@ -738,7 +748,7 @@ class Simulation:
     
     def _add_simultaneous_operation_loss(self, schedule1, schedule2, operation_type):
         """동시 이착륙에 대한 큰 loss 추가"""
-        self.total_safety_loss += 500
+        # total_safety_loss에는 추가하지 않고 별도로만 관리 (중복 방지)
         self.total_simultaneous_ops_loss += 500
         self.safety_loss_breakdown["simultaneous_ops"] += 500
         debug("SIMULTANEOUS OPERATION LOSS: 500")

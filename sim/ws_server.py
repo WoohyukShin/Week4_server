@@ -24,6 +24,9 @@ class WebSocketServer:
                 if data.get("type") == "start_simulation":
                     # 프론트에서 시뮬레이션 시작 요청
                     await self.handle_start_simulation(data, websocket)
+                elif data.get("type") == "reset_simulation":
+                    # 프론트에서 시뮬레이션 리셋 요청
+                    await self.handle_reset_simulation(websocket)
                 elif data.get("type") == "event":
                     # 프론트에서 event 발생 시
                     self.simulation.on_event(data["event"])
@@ -43,10 +46,37 @@ class WebSocketServer:
         finally:
             self.clients.remove(websocket)
 
+    async def handle_reset_simulation(self, websocket):
+        """Handle reset simulation message from frontend"""
+        debug("Resetting simulation")
+        
+        # Reset the simulation state
+        self.simulation_started = False
+        
+        # Reset the simulation object
+        self.simulation.reset()
+        
+        # Send confirmation to frontend
+        response = {
+            "type": "reset_simulation_response",
+            "success": True
+        }
+        debug(f"Sending reset response to frontend: {response}")
+        await websocket.send(json.dumps(response))
+        debug("Simulation reset successfully")
+
     async def handle_start_simulation(self, data, websocket):
         """Handle start simulation message from frontend"""
+        debug(f"Received start simulation request: {data}")
         if self.simulation_started:
             debug("Simulation already started")
+            # Send error response to frontend
+            response = {
+                "type": "start_simulation_response",
+                "success": False,
+                "error": "Simulation already started. Please reset first."
+            }
+            await websocket.send(json.dumps(response))
             return
         
         algorithm = data.get("algorithm", "greedy")

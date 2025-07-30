@@ -1,6 +1,7 @@
 from enum import Enum
 import threading
 import time
+import json
 from sim.event import Event
 from utils.logger import debug
 from sim.scheduler import Scheduler
@@ -33,7 +34,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("rl", self)  # Use greedy algorithm by default
+        self.scheduler = Scheduler("greedy", self)  # Use greedy algorithm by default
 
         self.rl_agent = None  # RL 에이전트
         self.training_mode = False  # 학습 모드
@@ -124,6 +125,9 @@ class Simulation:
                     debug(f"TOTAL SCORE: {self.get_total_score():.1f}")
                     debug(f"===========================")
 
+                    # Send results to frontend
+                    self.send_simulation_results()
+
                     if self.training_mode and self.rl_agent:
                         final_reward = -self.get_total_loss()  # 손실을 음수 보상으로 변환
                         self._end_rl_episode(final_reward)
@@ -149,7 +153,71 @@ class Simulation:
 
     def stop(self):
         self.running = False
-        debug("시뮬레이션 중지")
+        debug("시뮬레이션 종료")
+
+    def reset(self):
+        """Reset simulation to initial state for restarting"""
+        debug("Resetting simulation to initial state")
+        
+        # Stop current simulation
+        self.running = False
+        
+        # Reset time and state
+        self.time = 0
+        
+        # Reset all schedules to initial state
+        for schedule in self.schedules:
+            schedule.status = FlightStatus.DORMANT
+            schedule.actual_time = None
+            schedule.runway = None
+            schedule.complete_time = None
+        
+        # Reset landing flights
+        for flight in self.landing_flights:
+            flight.status = FlightStatus.DORMANT
+            flight.actual_time = None
+            flight.runway = None
+            flight.complete_time = None
+        
+        # Reset completed schedules
+        self.completed_schedules = []
+        
+        # Reset event queue
+        self.event_queue = list(self.events)
+        
+        # Reset statistics
+        self.total_delay_loss = 0
+        self.total_safety_loss = 0
+        self.total_simultaneous_ops_loss = 0
+        self.total_runway_occupied_loss = 0
+        self.delay_scores = []
+        self.safety_scores = []
+        self.total_delay_time_weighted = 0.0
+        self.total_flights = 0
+        self.cancelled_flights = 0
+        self.safety_loss_breakdown = {
+            "weather_risk": 0.0,
+            "runway_closed": 0.0,
+            "runway_occupied": 0.0,
+            "simultaneous_ops": 0.0,
+            "accidents": 0.0
+        }
+        
+        # Reset weather
+        self.weather = Weather()
+        
+        # Reset RL-related state
+        self.episode_experiences = []
+        self.episode_count = 0
+        
+        # Reset speed
+        self.speed = 1
+        
+        # Reinitialize schedules and landing announce events
+        self.initialize_schedules()
+        self._init_landing_announce_events()
+        
+        debug("Simulation reset completed")
 
     def update_status(self):
         debug(f"status updated at TIME: {int_to_hhmm_colon(self.time)} | 현재 스케즐 수 : {len(self.schedules)}")
@@ -1031,3 +1099,24 @@ class Simulation:
         self.episode_count += 1
         
         debug(f"PPO 에피소드 {self.episode_count} 완료, 최종 보상: {final_reward}")
+
+    def send_simulation_results(self):
+        """Simulation results to frontend."""
+        if self.ws:
+            stats = self.calculate_statistics()
+            results = {
+                "type": "simulation_results",
+                "time": int_to_hhmm_colon(self.time),
+                "total_flights": self.total_flights,
+                "cancelled_flights": self.cancelled_flights,
+                "total_delay_time_weighted": stats["total_delay_time_weighted"],
+                "total_delay_loss": self.total_delay_loss,
+                "total_safety_loss": self.total_safety_loss,
+                "safety_breakdown": stats["safety_breakdown"],
+                "delay_scores": self.delay_scores,
+                "safety_scores": self.safety_scores,
+                "total_score": self.get_total_score(),
+                "delay_score": self.get_delay_score(),
+                "safety_score": self.get_safety_score()
+            }
+            self.ws.send(json.dumps(results))

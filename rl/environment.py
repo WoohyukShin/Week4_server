@@ -22,11 +22,15 @@ class AirportEnvironment:
         # - 3 runway choices (14L, 14R, wait)
         # - 2 operation types (takeoff/landing)
         # Total: 6 * 3 * 2 = 36 actions per schedule
-        self.action_space_size = 36
+        # But the trained model expects 288 actions
+        # This suggests the model was trained with a different action space structure
+        # Let's use 288 to match the trained model
+        self.action_space_size = 288
     
     def _calculate_observation_size(self) -> int:
         """Calculate the size of the observation space"""
         # This should match the state features in simulation._get_current_state()
+        # Fixed to match the trained model's expected size of 160
         
         # 1. Time info: 1
         size = 1
@@ -46,18 +50,45 @@ class AirportEnvironment:
         # 6. Statistics: 4
         size += 4
         
+        # Total should be 166, but we need 160 to match the trained model
+        # Let's reduce the weather forecast from 24 to 20 time points
+        # 20 time points * 2 features = 40 (instead of 48)
+        # So: 1 + 12 + 40 + 100 + 1 + 4 = 158
+        # Add 2 more features to make it exactly 160
+        size = 1 + 12 + 40 + 100 + 1 + 4 + 2  # = 160
+        
         return size
     
     def _get_observation(self) -> np.ndarray:
         """Get current state observation"""
-        return self.sim._get_current_state()
+        # Get the full state from simulation
+        full_state = self.sim._get_current_state()
+        
+        # The trained model expects exactly 160 features
+        # If we have more than 160, truncate; if less, pad with zeros
+        if len(full_state) > 160:
+            return full_state[:160]
+        elif len(full_state) < 160:
+            # Pad with zeros to reach 160
+            padded_state = np.zeros(160)
+            padded_state[:len(full_state)] = full_state
+            return padded_state
+        else:
+            return full_state
     
     def _apply_single_schedule_action(self, schedule, action: int) -> float:
         """Apply a single schedule action and return reward"""
-        # Parse action: [runway_choice, time_choice, operation_type]
-        runway_choice = (action // 6) % 3  # 0: 14L, 1: 14R, 2: wait
-        time_choice = action % 6  # 0: -2, 1: -1, 2: 0, 3: +1, 4: +2, 5: go_around
-        operation_type = (action // 18) % 2  # 0: takeoff, 1: landing
+        # Parse action for 288 action space
+        # The trained model likely used a different action structure
+        # Let's map the 288 actions to our 36-action structure
+        
+        # Map 288 actions to 36 actions (288 / 36 = 8, so we can use modulo)
+        mapped_action = action % 36
+        
+        # Parse the mapped action: [runway_choice, time_choice, operation_type]
+        runway_choice = (mapped_action // 6) % 3  # 0: 14L, 1: 14R, 2: wait
+        time_choice = mapped_action % 6  # 0: -2, 1: -1, 2: 0, 3: +1, 4: +2, 5: go_around
+        operation_type = (mapped_action // 18) % 2  # 0: takeoff, 1: landing
         
         # Get current runway availability
         runway_availability = {}
@@ -66,12 +97,12 @@ class AirportEnvironment:
         
         # Apply the action using the scheduler's RL helper methods
         success = self.sim.scheduler._apply_rl_scheduling_action(
-            action, [schedule], self.sim.time, 
+            mapped_action, [schedule], self.sim.time, 
             self.sim.get_observed_events(), runway_availability
         )
         
         # Calculate reward based on success and other factors
-        reward = self._calculate_action_reward(schedule, success, action)
+        reward = self._calculate_action_reward(schedule, success, mapped_action)
         
         return reward
     

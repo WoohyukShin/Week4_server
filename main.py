@@ -47,8 +47,15 @@ def main():
     start_time = max(360, min_etd - 20)  # 최소 0600, 또는 첫 비행 ETD - 20분
     end_time = None  # 시뮬레이션에서 자동 결정
 
-    use_ws = True  # WebSocket
+    use_ws = False  # WebSocket
     is_training = False  # 강화학습 반복용 (랜덤 시나리오 사용 시 True 권장)
+
+    if is_training:
+        print("PPO 훈련을 시작합니다...")
+        from train_rl import train_rl_with_real_simulation
+        best_model_path, training_history = train_rl_with_real_simulation(episodes=150)
+        print(f"훈련 완료! 최고 모델: {best_model_path}")
+        return
 
     if is_training:
         mode = SimulationMode.TRAINING

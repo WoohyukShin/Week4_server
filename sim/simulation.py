@@ -33,7 +33,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("greedy", self)  # Use greedy algorithm by default
+        self.scheduler = Scheduler("rl", self)  # Use greedy algorithm by default
 
         self.rl_agent = None  # RL 에이전트
         self.training_mode = False  # 학습 모드
@@ -360,7 +360,14 @@ class Simulation:
         
         if self.training_mode and self.rl_agent:
             immediate_reward = self._calculate_immediate_reward()
-            self._store_experience(immediate_reward)
+            # 실제 액션과 확률을 사용하여 경험 저장
+            actions = self.scheduler.get_actions()
+            action_probs = self.scheduler.get_action_probs()
+            value = self.scheduler.get_value()
+            if actions and action_probs:
+                self._store_experience_with_actions(immediate_reward, actions, action_probs, value)
+            else:
+                self._store_experience(immediate_reward)  # 기존 방식으로 fallback
             debug(f"즉시 피드백: {immediate_reward}")
         
 
@@ -520,6 +527,10 @@ class Simulation:
 
     def _init_landing_announce_events(self):
         for flight in self.landing_flights:
+            # ETA가 None인 경우 기본값 사용
+            if flight.eta is None:
+                continue  # ETA가 없으면 이벤트 생성하지 않음
+            
             noise = int(random.gauss(0, 20))  # 표준편차 20분
             announce_time = max(360, min(1320, flight.eta + noise - 20))  # 0600~2200 범위로 제한
             self.event_queue.append(
@@ -803,9 +814,18 @@ class Simulation:
             debug(f"잘못된 속도 설정: {speed}. 가능한 값: 1, 2, 4, 8, 64")
             return False
 
-    def set_rl_agent(self, agent):
+    def set_rl_agent(self, agent, model_path=None):
         """RL 에이전트 설정"""
         self.rl_agent = agent
+        
+        # 모델 경로가 제공되면 로드
+        if model_path and self.rl_agent:
+            try:
+                self.rl_agent.load_model(model_path)
+                debug(f"훈련된 RL 모델을 로드했습니다: {model_path}")
+            except Exception as e:
+                debug(f"RL 모델 로드 실패: {e}")
+        
         debug(f"RL 에이전트 설정 완료")
 
     def set_training_mode(self, training: bool):
@@ -814,11 +834,12 @@ class Simulation:
         debug(f"RL 훈련 모드: {training}")
     
     def _calculate_immediate_reward(self) -> float:
-        """즉시 피드백 계산 - 활주로 점유 충돌만"""
+        """즉시 피드백 계산 - 활주로 점유 충돌 및 동시 운영 위반 체크"""
         reward = 0.0
         
-        # 활주로 점유 충돌 체크 (지금까지 배정한 비행 중 같은 시간에 같은 활주로를 사용하는 비행이 있는가?)
+        # 활주로 점유 충돌 체크 (3분 간격)
         runway_usage = {}  # {runway_name: {time: flight_id}}
+        simultaneous_ops = {}  # {time: [flight_ids]} - 동시 운영 체크
         
         for schedule in self.schedules:
             if schedule.status in [FlightStatus.TAXI_TO_RUNWAY, FlightStatus.WAITING]:
@@ -826,28 +847,57 @@ class Simulation:
                     time = schedule.etd if schedule.is_takeoff else schedule.eta
                     runway = schedule.runway
                     
+                    # 1. 활주로 점유 충돌 체크 (3분 간격)
                     if runway not in runway_usage:
                         runway_usage[runway] = {}
                     
-                    if time in runway_usage[runway]:
-                        # 충돌 발생!
-                        reward -= 10.0
-                        debug(f"활주로 점유 충돌: {runway} {time}분에 {schedule.flight.flight_id}와 {runway_usage[runway][time]} 충돌")
+                    # 3분 간격으로 체크 (현재 시간부터 3분 후까지)
+                    for check_time in range(time, time + 4):  # time, time+1, time+2, time+3
+                        if check_time in runway_usage[runway]:
+                            # 충돌 발생! -300 패널티
+                            reward -= 300.0
+                            break
+                        else:
+                            runway_usage[runway][check_time] = schedule.flight.flight_id
+                    
+                    # 2. 동시 운영 위반 체크 (같은 시간대에 이착륙)
+                    if time not in simultaneous_ops:
+                        simultaneous_ops[time] = []
+                    
+                    # 같은 시간대에 다른 비행이 있는지 체크
+                    if len(simultaneous_ops[time]) > 0:
+                        reward -= 500.0
                     else:
-                        runway_usage[runway][time] = schedule.flight.flight_id
+                        simultaneous_ops[time].append(schedule.flight.flight_id)
         
         return reward
     
     def _store_experience(self, immediate_reward: float):
-        """경험 저장 (PPO용)"""
+        """경험 저장 (PPO용) - 기존 호환성 유지"""
         if self.rl_agent:
             # 현재 상태 관찰 (간단한 상태 표현)
             current_state = self._get_current_state()
             
-            # 경험 저장
+            # 경험 저장 (액션 정보 없이)
             self.episode_experiences.append({
                 'state': current_state,
                 'reward': immediate_reward,
+                'time': self.time
+            })
+
+    def _store_experience_with_actions(self, immediate_reward: float, actions: list, action_probs: list, value: float = 0.0):
+        """실제 액션과 확률을 포함한 경험 저장 (PPO용)"""
+        if self.rl_agent:
+            # 현재 상태 관찰
+            current_state = self._get_current_state()
+            
+            # 실제 액션과 확률을 포함한 경험 저장
+            self.episode_experiences.append({
+                'state': current_state,
+                'actions': actions,        # 실제 선택한 액션들
+                'action_probs': action_probs,  # 실제 액션 확률들
+                'immediate_reward': immediate_reward,  # 즉시 보상
+                'value': value,  # 현재 상태의 가치
                 'time': self.time
             })
 
@@ -855,27 +905,28 @@ class Simulation:
         """현재 상태를 상세한 벡터로 표현"""
         state_features = []
         
-        # 1. 시간 정보
+        # 1. 시간 정보 (1차원)
         state_features.append(self.time / 1440.0)  # 정규화된 시간
         
         # 2. 활주로 상태 (각 활주로별)
         for runway in self.airport.runways:
             state_features.extend([
-                1.0 if runway.closed else 0.0,  # 닫힘 여부
-                1.0 if runway.occupied else 0.0,  # 점유 여부
                 runway.next_available_time / 1440.0  # 다음 가용 시간 (정규화)
             ])
         
         # 3. 날씨 예보 정보 (현재 시간부터 2시간, 5분 간격)
         weather_forecast = self.weather.get_forecast_for_action()
         for i, forecast in enumerate(weather_forecast[:24]):  # 처음 24개 시점 (2시간)
+            # 날씨 위험도 정규화 (최대값 12.0으로 나누어 0~1 범위로)
+            takeoff_risk = forecast.get('takeoff_risk', 1.0) / 12.0
+            landing_risk = forecast.get('landing_risk', 1.0) / 12.0
             state_features.extend([
-                forecast.get('takeoff_risk', 1.0),  # 이륙 위험도
-                forecast.get('landing_risk', 1.0)   # 착륙 위험도
+                takeoff_risk,  # 이륙 위험도 (정규화)
+                landing_risk   # 착륙 위험도 (정규화)
             ])
         
-        # 4. 스케줄 정보 (최대 20개 스케줄)
-        max_schedules = 20
+        # 4. 스케줄 정보 (250차원)
+        max_schedules = 50
         available_schedules = [s for s in self.schedules 
                                 if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
         
@@ -900,26 +951,40 @@ class Simulation:
                 
                 state_features.extend([
                     1.0 if schedule.is_takeoff else 0.0,  # 이륙/착륙 구분
-                    (flight.priority or 0) / 10.0,  # 우선순위 (정규화)
+                    (flight.priority or 0) / 64.0,  # 우선순위 (정규화) - PRI_MAX = 64
                     flight.etd / 1440.0 if flight.etd else 0.0,  # ETD (정규화)
                     flight.eta / 1440.0 if flight.eta else 0.0,  # ETA (정규화)
                     status_value / 10.0  # 상태 (정규화)
                 ])
             else:
-                # 패딩 (스케줄이 없는 경우)
+                # 패딩 (스케줄이 없는 경우) - 항상 같은 위치에 0으로 채움
                 state_features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
         
-        # 5. 이벤트 정보 (활주로 닫힘, 사고 등)
-        active_events = [e for e in self.event_queue if e.time <= self.time]
-        state_features.append(len(active_events) / 10.0)  # 활성 이벤트 수 (정규화)
+        # 5. 이벤트 정보 (확장된 버전) - 최대 10개 이벤트
+        max_events = 10
+        observed_events = self.get_observed_events()
         
-        # 6. 통계 정보
-        state_features.extend([
-            len(self.completed_schedules) / 50.0,  # 완료된 스케줄 수
-            self.cancelled_flights / 10.0,  # 취소된 비행 수
-            self.total_delay_loss / 10000.0,  # 지연 손실 (정규화)
-            self.total_safety_loss / 10000.0  # 안전 손실 (정규화)
-        ])
+        for i in range(max_events):
+            if i < len(observed_events):
+                event = observed_events[i]
+
+                # 활주로 인코딩 (14L=0.0, 14R=1.0, 기타=0.5)
+                runway_encoding = 0.0
+                if event.target == "14L" or event.target == "32R":
+                    runway_encoding = 0.0
+                elif event.target == "14R" or event.target == "32L":
+                    runway_encoding = 1.0
+                else:
+                    runway_encoding = 0.5
+                
+                state_features.extend([
+                    runway_encoding,  # 활주로
+                    event.time / 1440.0,  # 시작 시간 (정규화)
+                    event.duration / 1440.0  # 지속 시간 (정규화)
+                ])
+            else:
+                # 패딩 (이벤트가 없는 경우) - 항상 같은 위치에 0으로 채움
+                state_features.extend([0.0, 0.0, 0.0])
         
         state_array = np.array(state_features)
         return state_array
@@ -929,22 +994,32 @@ class Simulation:
         if not self.rl_agent or not self.episode_experiences:
             return
         
-        # 마지막 경험에 최종 보상 추가
-        if self.episode_experiences:
-            self.episode_experiences[-1]['reward'] += final_reward
-        
         # PPO 에이전트에 경험 전달
         for i, exp in enumerate(self.episode_experiences):
-            # 간단한 액션과 확률 (실제로는 scheduler에서 결정됨)
-            dummy_actions = [0] * 5  # 5개 스케줄에 대한 더미 액션
-            dummy_probs = [0.2] * 5  # 균등 확률
+            # 실제 액션과 확률이 있는 경우 사용, 없으면 더미 사용
+            if 'actions' in exp and 'action_probs' in exp:
+                actions = exp['actions']
+                action_probs = exp['action_probs']
+            else:
+                # 기존 호환성을 위한 더미 액션
+                actions = [0] * 5
+                action_probs = [0.2] * 5
+            
+            # 개별 보상 + 전체 보상
+            immediate_reward = exp.get('immediate_reward', 0.0)
+            gamma = 1  # 감가율 (은 적용하지 않을 예정)
+            discounted_final_reward = final_reward
+            total_reward = immediate_reward + discounted_final_reward
+            
+            # 실제 value 사용 (저장된 value가 있으면 사용, 없으면 0.0)
+            value = exp.get('value', 0.0)
             
             self.rl_agent.store_transition(
                 exp['state'], 
-                dummy_actions, 
-                dummy_probs,
-                exp['reward'], 
-                0.0,  # 더미 가치
+                actions, 
+                action_probs,
+                total_reward,  # 개별 보상 + 전체 보상
+                value,  # 실제 value 사용
                 i == len(self.episode_experiences) - 1  # 마지막이면 done=True
             )
         

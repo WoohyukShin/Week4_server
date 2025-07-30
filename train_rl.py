@@ -16,14 +16,14 @@ from main import create_rkss_airport
 from utils.scenario_loader import generate_random_scenario, load_scenario_from_dict
 from sim.simulation import Simulation
 from rl.agent import PPOAgent
-from utils.logger import debug, set_training_mode
+from utils.logger import debug
 
 # matplotlib 한글 폰트 설정
 try:
     import matplotlib.pyplot as plt
     import matplotlib.font_manager as fm
 
-    plt.rcParams['font.family'] = ['DejaVu Sans', 'Malgun Gothic', 'NanumGothic', 'AppleGothic']
+    plt.rcParams['font.family'] = ['DejaVu Sans', 'Malgun Gothic', 'NanumGothic']
     plt.rcParams['axes.unicode_minus'] = False  # 마이너스 기호 깨짐 방지
     
     try:
@@ -36,27 +36,12 @@ except ImportError:
 def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
     """실제 시뮬레이션을 사용한 RL 훈련"""
     print("=== 실제 시뮬레이션 기반 RL 훈련 시작 ===")
-    
-    # 훈련 모드 활성화
-    set_training_mode(True)
-    
+
     # RL 에이전트 초기화
-    # 상태 크기 계산: 1(시간) + 2*3(활주로) + 24*2(날씨) + 20*5(스케줄) + 1(이벤트) + 4(통계) = 1 + 6 + 48 + 100 + 1 + 4 = 160
-    observation_size = 160
+    # 상태 크기 계산: 1(시간) + 2(활주로) + 24*2(날씨) + 50*5(스케줄) + 10*3(이벤트) = 1 + 2 + 48 + 250 + 30 = 331
+    observation_size = 331
     action_size = 288  # 2개 활주로 × 144개 시간 선택
     rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
-    
-    # 기존 모델 로드 (있는 경우)
-    models_dir = "models"
-    model_path = None
-    
-    if os.path.exists(models_dir):
-        model_files = [f for f in os.listdir(models_dir) if f.startswith("ppo_best_") and f.endswith(".pth")]
-        if model_files:
-            latest_model = sorted(model_files)[-1]
-            model_path = os.path.join(models_dir, latest_model)
-            rl_agent.load_model(model_path)
-            print(f"기존 PPO 모델 로드: {model_path}")
     
     # 최고 성능 추적
     best_reward = float('-inf')
@@ -66,6 +51,7 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
     patience = 30
     no_improvement_count = 0
     
+    debug("Hello World!!!!!!!")
     # 훈련 통계
     training_history = []
     
@@ -143,7 +129,7 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
             best_reward = final_reward
             no_improvement_count = 0  # 개선됨
             timestamp = int(time.time())
-            best_model_path = f"models/ppo_best_{timestamp}.pth"
+            best_model_path = f"models/ppo_best.pth"
             
             # 모델 저장
             os.makedirs("models", exist_ok=True)

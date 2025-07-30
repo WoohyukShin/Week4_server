@@ -8,6 +8,20 @@ class Scheduler:
     def __init__(self, algorithm="greedy", sim=None):
         self.algorithm = algorithm
         self.sim = sim
+        self.last_actions = []  # 마지막 선택한 액션들
+        self.last_action_probs = []  # 마지막 액션 확률들
+    
+    def get_actions(self):
+        """마지막 선택한 액션들 반환"""
+        return self.last_actions
+    
+    def get_action_probs(self):
+        """마지막 액션 확률들 반환"""
+        return self.last_action_probs
+    
+    def get_value(self):
+        """마지막 value 반환"""
+        return getattr(self, 'last_value', 0.0)
     
     def optimize(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """ event_queue : 관측 가능한 예정된 모든 이벤트 (지금은 RWY_CLOSUIRE, RWY_INVERT만 존재) """
@@ -292,32 +306,39 @@ class Scheduler:
         
         try:
             from rl.environment import AirportEnvironment
-            from rl.agent import PPOAgent
-            import os
             
-            # Initialize RL environment and agent if not already done
+            # Initialize RL environment if not already done
             if not hasattr(self, 'rl_env'):
                 self.rl_env = AirportEnvironment(self.sim)
-                self.rl_agent = PPOAgent(
-                    observation_size=self.rl_env.observation_space_size,
-                    action_size=self.rl_env.action_space_size
-                )
-                
-                # Load trained model
-                model_path = "models/ppo_best_second.pth"
-                if os.path.exists(model_path):
-                    try:
-                        self.rl_agent.load_model(model_path)
-                        debug(f"학습된 RL 모델을 {model_path}에서 로드했습니다")
-                    except Exception as e:
-                        debug(f"RL 모델 로드 실패: {e}")
-                        debug("Greedy 알고리즘으로 fallback합니다")
+            
+            # simulation에서 설정된 rl_agent 사용
+            if not self.sim.rl_agent:
+                debug("RL 에이전트가 설정되지 않았습니다. Best 모델을 자동으로 로드합니다")
+                try:
+                    import os
+                    from rl.agent import PPOAgent
+                    
+                    # MODEL PATH
+                    model_path = "models/ppo_best.pth"
+                    if os.path.exists(model_path):
+                        # RL 환경과 에이전트 생성
+                        rl_agent = PPOAgent(
+                            observation_size=self.rl_env.observation_space_size,
+                            action_size=self.rl_env.action_space_size
+                        )
+                        
+                        # 훈련된 모델 로드
+                        rl_agent.load_model(model_path)
+                        self.sim.set_rl_agent(rl_agent)
+                        debug(f"Best 모델을 로드했습니다: {model_path}")
+                    else:
+                        debug(f"모델 파일을 찾을 수 없습니다: {model_path}. Greedy 알고리즘으로 fallback합니다")
                         return self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
-                else:
-                    debug(f"RL 모델 파일을 찾을 수 없음: {model_path}")
-                    debug("Greedy 알고리즘으로 fallback합니다")
+                except Exception as e:
+                    debug(f"모델 로드 중 오류 발생: {e}. Greedy 알고리즘으로 fallback합니다")
                     return self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
             
+            rl_agent = self.sim.rl_agent
             # Get current state observation
             state = self.rl_env._get_observation()
             
@@ -330,7 +351,12 @@ class Scheduler:
                 return {}
             
             # Select actions using RL agent
-            actions, action_probs, value = self.rl_agent.select_action(state, num_schedules)
+            actions, action_probs, value = rl_agent.select_action(state, num_schedules)
+            
+            # 액션과 확률, value 저장 (나중에 simulation에서 사용)
+            self.last_actions = actions
+            self.last_action_probs = action_probs
+            self.last_value = value
             
             total_reward = 0.0
             assigned_count = 0
@@ -354,7 +380,6 @@ class Scheduler:
             debug(f"RL 액션 적용 완료: {assigned_count}/{num_schedules} 비행 배정, 총 보상: {total_reward:.2f}")
             
             return result
-            
         except Exception as e:
             debug(f"RL 알고리즘 실행 중 오류 발생: {e}")
             debug("Greedy 알고리즘으로 fallback합니다")

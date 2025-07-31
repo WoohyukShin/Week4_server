@@ -18,6 +18,10 @@ def create_rkss_airport():
     return Airport("RKSS", "GMP", runways, taxiways)
 
 def main():
+    # Railway deployment logging
+    debug("Starting Air Traffic Control Backend on Railway...")
+    debug(f"PORT environment variable: {os.environ.get('PORT', 'Not set')}")
+    
     # 랜덤 시나리오 사용
     use_random_scenario = True
     # 시나리오 파일 저장
@@ -68,12 +72,16 @@ def main():
 
     if mode == SimulationMode.INTERACTIVE:
         from sim.ws_server import WebSocketServer
-        ws_server = WebSocketServer(sim)
+        # Use Railway's PORT environment variable
+        port = int(os.environ.get("PORT", 8765))
+        debug(f"Starting WebSocket server on port {port}")
+        ws_server = WebSocketServer(sim, port=port)
         ws_thread = threading.Thread(target=ws_server.start, daemon=True)
         ws_thread.start()
         sim.ws = ws_server
         # Don't start simulation immediately - wait for start message from frontend
         debug("WebSocket server started. Waiting for start message from frontend...")
+        debug(f"Frontend URL: https://week4-front.vercel.app/")
         # Keep the main thread alive
         try:
             while True:

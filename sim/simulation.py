@@ -433,10 +433,10 @@ class Simulation:
         if self.training_mode and self.rl_agent:
             immediate_reward = self._calculate_immediate_reward()
             
-            # 즉시 보상을 Loss에 반영
+            # 즉시 보상을 Safety Loss에 반영 (동시 이착륙, 활주로 점유 등은 safety 이슈)
             if immediate_reward < 0:
-                self.total_delay_loss += abs(immediate_reward)
-                debug(f"🚨 즉시 보상 Loss 반영: {immediate_reward} -> total_delay_loss: {self.total_delay_loss}")
+                self.total_safety_loss += abs(immediate_reward)
+                debug(f"🚨 즉시 보상 Safety Loss 반영: {immediate_reward} -> total_safety_loss: {self.total_safety_loss}")
             
             # 실제 액션과 확률을 사용하여 경험 저장
             actions = self.scheduler.get_actions()

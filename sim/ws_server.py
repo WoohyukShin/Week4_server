@@ -6,6 +6,7 @@ from utils.logger import debug
 import functools
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import PlainTextResponse
+from fastapi import WebSocketDisconnect
 
 class WebSocketServer:
     def __init__(self, simulation, host="0.0.0.0", port=None):
@@ -49,30 +50,27 @@ class WebSocketServer:
             pass
             
         try:
-            async for message in websocket:
+            while True:
+                message = await websocket.receive_text()
                 debug(f"프론트에서 메시지 수신: {message}")
                 data = json.loads(message)
+
                 if data.get("type") == "start_simulation":
-                    # 프론트에서 시뮬레이션 시작 요청
                     await self.handle_start_simulation(data, websocket)
                 elif data.get("type") == "reset_simulation":
-                    # 프론트에서 시뮬레이션 리셋 요청
                     await self.handle_reset_simulation(websocket)
                 elif data.get("type") == "event":
-                    # 프론트에서 event 발생 시
                     self.simulation.on_event(data["event"])
                 elif data.get("type") == "speed_control":
-                    # 프론트에서 속도 변경 요청
                     speed = data.get("speed", 1)
                     success = self.simulation.set_speed(speed)
-                    # Send confirmation back to frontend
                     response = {
                         "type": "speed_control_response",
                         "success": success,
                         "speed": speed if success else self.simulation.speed
                     }
                     await websocket.send(json.dumps(response))
-        except websockets.ConnectionClosed:
+        except WebSocketDisconnect:
             debug("클라이언트 연결 종료")
         finally:
             self.clients.remove(websocket)

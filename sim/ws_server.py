@@ -1,22 +1,35 @@
 import asyncio
 import websockets
 import json
+import os
 from utils.logger import debug
 import functools
 
 class WebSocketServer:
-    def __init__(self, simulation, host="0.0.0.0", port=8765):
+    def __init__(self, simulation, host="0.0.0.0", port=None):
         self.simulation = simulation
         self.host = host
-        self.port = port
+        # Use Railway's PORT environment variable
+        self.port = port or int(os.environ.get("PORT", 8765))
         self.clients = set()
         self.loop = None
         self.simulation_started = False
+        debug(f"WebSocket server initialized on port {self.port}")
 
     async def handler(self, websocket, path):
         debug("클라이언트 연결됨")
         self.clients.add(websocket)
         self.simulation.ws = self  # Simulation에서 직접 send 가능하게
+        
+        # Send CORS headers for Railway deployment
+        try:
+            await websocket.send(json.dumps({
+                "type": "connection_established",
+                "message": "Connected to Railway backend"
+            }))
+        except:
+            pass
+            
         try:
             async for message in websocket:
                 debug(f"프론트에서 메시지 수신: {message}")

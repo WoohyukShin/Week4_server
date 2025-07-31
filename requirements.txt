@@ -2,10 +2,3 @@ websockets==10.4
 pulp==2.7.0
 numpy==1.25.0
 torch==2.0.1
-asyncio
-json
-threading
-time
-os
-math
-random

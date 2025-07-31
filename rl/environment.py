@@ -4,7 +4,7 @@ Provides the interface between the simulation and RL agent
 """
 
 import numpy as np
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 from sim.flight import FlightStatus
 
 class AirportEnvironment:
@@ -13,15 +13,15 @@ class AirportEnvironment:
     def __init__(self, simulation):
         self.sim = simulation
         
-        # Observation space size (calculated based on state features)
-        # This should match the state size in simulation._get_current_state()
-        self.observation_space_size = self._calculate_observation_size()
+        # MultiDiscrete 액션 공간 정의
+        # [time_choice, runway_choice]
+        # time_choice: 0~180 (181개) - 지연 시간 (분)
+        # runway_choice: 0~1 (2개) - 0: 14L, 1: 14R
+        self.action_space = [181, 2]  # MultiDiscrete
+        self.action_space_size = 181 * 2  # 총 액션 수 (호환성용)
         
-        # Action space size: 
-        # 이륙: 281(시간 0~280분) * 2(14L, 14R) = 562개
-        # 착륙: 6(시간 -2~+2, go_around) * 2(14L, 14R) = 12개
-        # 총: 562 + 12 = 574개 액션
-        self.action_space_size = 574
+        # Observation space size 계산
+        self.observation_space_size = self._calculate_observation_size()
     
     def _calculate_observation_size(self) -> int:
         """Calculate the size of the observation space"""
@@ -31,102 +31,125 @@ class AirportEnvironment:
         # 3. 날씨 예보: 24 * 2 = 48 (24개 시점 * 2개 특성)
         # 4. 스케줄 정보: 50 * 5 = 250 (50개 스케줄 * 5개 특성)
         # 5. 이벤트 정보: 10 * 3 = 30 (10개 이벤트 * 3개 특성)
-        # 총합: 1 + 2 + 48 + 250 + 30 = 331
+        # 6. 현재 배정할 비행 정보: 6 (flight_id, etd/eta, priority, is_takeoff, status, runway)
+        # 총합: 1 + 2 + 48 + 250 + 30 + 6 = 337
         
-        size = 1 + 2 + 48 + 250 + 30  # = 331
+        size = 1 + 2 + 48 + 250 + 30 + 6  # = 337
         
         return size
     
-    def _get_observation(self) -> np.ndarray:
-        """Get current state observation"""
-        # Get the full state from simulation
-        full_state = self.sim._get_current_state()
+    def _get_observation_for_schedule(self, schedule) -> np.ndarray:
+        """Get current state observation with specific schedule information"""
+        # 기본 상태 가져오기 (331차원)
+        base_state = self.sim._get_current_state()
         
-        # The new model expects exactly 331 features
-        # If we have more than 331, truncate; if less, pad with zeros
-        if len(full_state) > 331:
-            return full_state[:331]
-        elif len(full_state) < 331:
-            # Pad with zeros to reach 331
-            padded_state = np.zeros(331)
-            padded_state[:len(full_state)] = full_state
-            return padded_state
-        else:
-            return full_state
+        # 현재 배정할 비행 정보 추가 (6차원)
+        flight_info = self._get_flight_info(schedule)
+        
+        # 전체 observation 구성 (331 + 6 = 337차원)
+        full_observation = np.concatenate([base_state, flight_info])
+        
+        # 크기 확인 (디버깅용)
+        if len(full_observation) != self.observation_space_size:
+            print(f"🚨 Observation 크기 불일치: {len(full_observation)} vs {self.observation_space_size}")
+        
+        return full_observation
     
-    def _apply_single_schedule_action(self, schedule, action: int) -> float:
+    def _get_flight_info(self, schedule) -> np.ndarray:
+        """Get information about the specific flight to be scheduled"""
+        flight_info = np.zeros(6)
+        
+        # 0: flight_id (normalized)
+        flight_info[0] = float(hash(schedule.flight.flight_id) % 1000) / 1000.0
+        
+        # 1: original ETD/ETA (normalized to 0-1)
+        if schedule.is_takeoff:
+            original_time = schedule.flight.etd
+        else:
+            original_time = schedule.eta
+        
+        if original_time is not None:
+            # 시간을 0-1 범위로 정규화 (0600-2200 = 360-1320)
+            flight_info[1] = (original_time - 360) / (1320 - 360)
+        else:
+            flight_info[1] = 0.5  # 기본값
+        
+        # 2: priority (normalized)
+        flight_info[2] = schedule.priority / 64.0  # 최대 priority로 정규화
+        
+        # 3: is_takeoff (0 or 1)
+        flight_info[3] = 1.0 if schedule.is_takeoff else 0.0
+        
+        # 4: status (normalized)
+        status_mapping = {
+            FlightStatus.DORMANT: 0.0,
+            FlightStatus.WAITING: 0.2,
+            FlightStatus.TAXI_TO_RUNWAY: 0.4,
+            FlightStatus.TAKE_OFF: 0.6,
+            FlightStatus.LANDING: 0.7,
+            FlightStatus.TAXI_TO_GATE: 0.8,
+            FlightStatus.DELAYED: 0.9,
+            FlightStatus.CANCELLED: 1.0
+        }
+        flight_info[4] = status_mapping.get(schedule.status, 0.0)
+        
+        # 5: runway assignment (0: none, 1: 14L, 2: 14R)
+        if schedule.runway is None:
+            flight_info[5] = 0.0
+        elif schedule.runway.name == "14L":
+            flight_info[5] = 0.5
+        else:  # 14R
+            flight_info[5] = 1.0
+        
+        return flight_info
+    
+    def _apply_single_schedule_action(self, schedule, action: List[int]) -> float:
         """Apply a single schedule action and return reward"""
-        # 이륙과 착륙에 따라 다른 액션 해석
+        # action: [time_choice, runway_choice]
+        time_choice, runway_choice = action
+        
+        # 올바른 ETD/ETA 사용
         if schedule.is_takeoff:
-            # 이륙 액션: 0~561 (562개)
-            if action >= 562:
-                return 0.0  # 잘못된 액션
+            original_time = schedule.flight.etd
+            if original_time is None:
+                return 0.0  # ETD가 없으면 실패
             
-            # 이륙 액션 해석
-            delay_choice = action // 2  # 0~280 (281개)
-            runway_choice = action % 2  # 0: 14L, 1: 14R
-            
-            # 시간 계산: ETD + delay
-            actual_time = schedule.flight.etd + delay_choice
-            runway_name = "14L" if runway_choice == 0 else "14R"
-            
+            # 시간 계산: ETD + delay (0~180분)
+            actual_time = original_time + time_choice
         else:
-            # 착륙 액션: 562~573 (12개)
-            if action < 562 or action >= 574:
-                return 0.0  # 잘못된 액션
+            # 착륙: original_eta를 기준으로 15분 간격으로 제한
+            original_time = schedule.original_eta
+            if original_time is None:
+                return 0.0  # original_eta가 없으면 실패
             
-            # 착륙 액션 해석 (0~11로 변환)
-            landing_action = action - 562
-            
-            time_choice = landing_action // 2  # 0: -2, 1: -1, 2: 0, 3: +1, 4: +2, 5: go_around
-            runway_choice = landing_action % 2  # 0: 14L, 1: 14R
-            
-            # 시간 계산: ETA ±2분 또는 go_around
-            if time_choice == 5:  # go_around
-                actual_time = None
-                runway_name = None
+            # time_choice를 0~12 범위로 변환 (// 15) 후 다시 15분 간격으로 변환 (* 15)
+            normalized_choice = time_choice // 15
+            actual_time = original_time + (normalized_choice * 15)
+        
+        # 활주로 선택
+        runway_name = "14L" if runway_choice == 0 else "14R"
+        
+        # 활주로 선택
+        runway = next((r for r in self.sim.airport.runways if r.name == runway_name), None)
+        if runway is None:
+            return 0.0
+        
+        # 스케줄 배정 (무조건 배정)
+        try:
+            if schedule.is_takeoff:
+                schedule.etd = actual_time
             else:
-                time_offset = time_choice - 2  # -2, -1, 0, +1, +2
-                actual_time = schedule.eta + time_offset
-                runway_name = "14L" if runway_choice == 0 else "14R"
+                schedule.eta = actual_time
+            
+            schedule.runway = runway
+            return 1.0  # 성공
+        except Exception as e:
+            return 0.0  # 실패
+    
+    def get_action_mask(self, schedule) -> List[List[bool]]:
+        """Get action mask for the current schedule"""
+        # [time_mask, runway_mask]
+        time_mask = [True] * 181  # 모든 시간 선택 가능
+        runway_mask = [True, True]  # 14L, 14R 모두 가능
         
-        # Get current runway availability
-        runway_availability = {}
-        for runway in self.sim.airport.runways:
-            runway_availability[runway.name] = runway.next_available_time
-        
-        # 직접 액션 적용
-        success = False
-        if schedule.is_takeoff:
-            if actual_time is not None and runway_name is not None:
-                # 이륙 배정
-                for runway in self.sim.airport.runways:
-                    if runway.name == runway_name:
-                        schedule.runway = runway
-                        schedule.etd = actual_time
-                        success = True
-                        break
-        else:
-            if actual_time is None and runway_name is None:
-                # go_around
-                from sim.event import Event
-                go_around_event = Event(
-                    event_type="GO_AROUND",
-                    target_type="",
-                    target=schedule.flight.flight_id,
-                    time=self.sim.time,
-                    duration=0
-                )
-                self.sim.event_queue.append(go_around_event)
-                success = True
-            elif actual_time is not None and runway_name is not None:
-                # 착륙 배정
-                for runway in self.sim.airport.runways:
-                    if runway.name == runway_name:
-                        schedule.runway = runway
-                        schedule.eta = actual_time
-                        success = True
-                        break
-        
-        # Simulation에서 보상 계산하므로 여기서는 성공/실패만 반환
-        return 1.0 if success else 0.0
+        return [time_mask, runway_mask]

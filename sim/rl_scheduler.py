@@ -32,11 +32,11 @@ class RLScheduler:
     def _init_agent(self, model_path: str = None):
         """RL 에이전트 초기화"""
         observation_size = self.env._get_observation_space_size()
-        action_size = self.env._get_action_space_size()
+        action_space = self.env.action_space
         
         self.agent = PPOAgent(
             observation_size=observation_size,
-            action_size=action_size
+            action_space=action_space
         )
         
         # 기존 모델 로드

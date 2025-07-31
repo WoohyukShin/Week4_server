@@ -2,6 +2,7 @@ from utils.logger import debug
 from sim.flight import FlightStatus
 from sim.schedule import Schedule
 import heapq
+import numpy as np
 from utils.time_utils import int_to_hhmm_colon
 
 class Scheduler:
@@ -49,6 +50,7 @@ class Scheduler:
         
         # 새롭게 재배정된 결과를 출력
         self._debug_schedule_times(schedules, current_time)
+        
         debug("=====NEW SCHEDULER RESULT=====")
         # 모든 schedule 시간 순으로 출력
         schedule_times = []
@@ -69,108 +71,6 @@ class Scheduler:
             debug(f"{flight_id} : {int_to_hhmm_colon(time)}")
         debug("===========================")
     
-    def _apply_ppo_action_with_constraints(self, schedule, action, current_time, 
-                                         runway_availability, forecast):
-        """PPO 액션을 제약 조건을 고려하여 스케줄에 적용"""
-        # 액션 해석: [runway_choice, time_choice, landing_decision]
-        runway_choice = (action // 144) % 2  # 0: 14L, 1: 14R
-        time_choice = action % 144  # 0~143: 시간 선택
-        landing_decision = (action // 288) % 2  # 0: landing, 1: go_around (착륙의 경우)
-        
-        runway_name = "14L" if runway_choice == 0 else "14R"
-        
-        # 비행의 원래 ETD/ETA를 기준으로 시간 선택
-        if schedule.is_takeoff:
-            original_etd = schedule.flight.etd
-            if original_etd is None:
-                return False
-            
-            # ETD를 분 단위로 변환
-            if isinstance(original_etd, str):
-                if ':' in original_etd:
-                    hour, minute = map(int, original_etd.split(':'))
-                else:
-                    hour = int(original_etd) // 100
-                    minute = int(original_etd) % 100
-                etd_minutes = hour * 60 + minute
-            else:
-                etd_minutes = original_etd
-            
-            # ETD 기준으로 직접 시간 선택 (0~143분)
-            selected_time = etd_minutes + time_choice
-            
-        else:
-            # 착륙: ETA 기준으로 시간 선택 + 착륙 결정
-            original_eta = schedule.flight.eta
-            if original_eta is None:
-                return False
-            
-            # ETA를 분 단위로 변환
-            if isinstance(original_eta, str):
-                if ':' in original_eta:
-                    hour, minute = map(int, original_eta.split(':'))
-                else:
-                    hour = int(original_eta) // 100
-                    minute = int(original_eta) % 100
-                eta_minutes = hour * 60 + minute
-            else:
-                eta_minutes = original_eta
-            
-            # ETA 기준으로 직접 시간 선택 (0~143분)
-            selected_time = eta_minutes + time_choice
-            
-            # 착륙 결정 적용
-            if landing_decision == 1:  # go_around
-                # go_around 이벤트 생성 (Event 객체로 생성)
-                from sim.event import Event
-                go_around_event = Event(
-                    event_type="GO_AROUND",
-                    target_type="",
-                    target=schedule.flight.flight_id,
-                    time=selected_time,
-                    duration=0
-                )
-                self.sim.event_queue.append(go_around_event)
-                return True
-        
-        # 활주로 제약 조건 검사 (닫힘 여부만)
-        if not self._check_runway_closure(runway_name, selected_time):
-            return False
-        
-        # 스케줄 배정
-        try:
-            if schedule.is_takeoff:
-                schedule.etd = selected_time
-                schedule.eta = selected_time
-            
-            # Runway 객체 찾아서 할당
-            runway_obj = next((r for r in self.sim.airport.runways if r.name == runway_name), None)
-            if runway_obj:
-                schedule.runway = runway_obj
-            else:
-                debug(f"활주로 객체를 찾을 수 없음: {runway_name}")
-                return False
-            
-            return True
-        except Exception as e:
-            debug(f"스케줄 배정 실패: {e}")
-            return False
-    
-    def _check_runway_closure(self, runway_name, selected_time):
-        """활주로 닫힘 여부만 검사"""
-        # 활주로가 닫혀있는지 확인
-        runway = next((r for r in self.sim.airport.runways if r.name == runway_name), None)
-        if runway and runway.closed:
-            return False
-        # 해당 시간에 활주로가 닫히는 이벤트가 있는지 확인
-        for event in self.sim.event_queue:
-            if event.event_type == 'RUNWAY_CLOSURE':
-                if event.target == runway_name:
-                    closure_start = event.time
-                    closure_end = event.time + event.duration
-                    if closure_start <= selected_time <= closure_end:
-                        return False
-        return True
 
     def greedy(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """시간 기반 그리디 알고리즘"""
@@ -211,44 +111,7 @@ class Scheduler:
             for runway in self.sim.airport.runways:
                 runway_usage[runway.name] = max(runway_usage[runway.name], current_time)
                 runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], current_time)
-        
-        # Process takeoff schedules
-        for schedule in takeoff_schedules:
-            # Find earliest available time for takeoff
-            earliest_time = max(current_time, schedule.etd or current_time)
-            
-            # Try to find available runway (14L/32R for takeoff)
-            assigned_runway = None
-            assigned_time = None
-            
-            for runway in self.sim.airport.runways:
-                current_direction = runway.get_current_direction()
-                if current_direction in ["14L", "32R"]:  # Takeoff runways
-                    # Check if runway is closed
-                    is_closed = False
-                    for closure in runway_closures:
-                        if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
-                           closure['start_time'] <= earliest_time <= closure['end_time']:
-                            is_closed = True
-                            break
-                    
-                    if not is_closed:
-                        # Check if runway is available at this time (respect separation)
-                        available_time = max(earliest_time, runway_usage[current_direction])
-                        
-                        # Check if runway can handle operation
-                        if runway.can_handle_operation(available_time):
-                            assigned_runway = runway
-                            assigned_time = available_time
-                            break
-            
-            if assigned_runway and assigned_time:
-                schedule.runway = assigned_runway
-                schedule.etd = assigned_time
-                # Update runway usage with 4-minute separation
-                runway_usage[assigned_runway.get_current_direction()] = assigned_time + 4
-                debug(f"{schedule.flight.flight_id} 이륙: {int_to_hhmm_colon(assigned_time)} 활주로 {assigned_runway.get_current_direction()}")
-        
+
         # Process landing schedules
         for schedule in landing_schedules:
             # Find earliest available time for landing
@@ -289,6 +152,45 @@ class Scheduler:
                 # Landing failed - go-around
                 self.sim.event_handler._go_around(schedule.flight.flight_id)
                 debug(f"{schedule.flight.flight_id} 착륙 실패: {int_to_hhmm_colon(earliest_time)} - go-around 발생")
+
+        # Process takeoff schedules
+        for schedule in takeoff_schedules:
+            # Find earliest available time for takeoff
+            earliest_time = max(current_time, schedule.etd or current_time)
+            
+            # Try to find available runway (14L/32R for takeoff)
+            assigned_runway = None
+            assigned_time = None
+            
+            for runway in self.sim.airport.runways:
+                current_direction = runway.get_current_direction()
+                if current_direction in ["14L", "32R"]:  # Takeoff runways
+                    # Check if runway is closed
+                    is_closed = False
+                    for closure in runway_closures:
+                        if (closure['runway'] == runway.name or closure['runway'] == runway.inverted_name) and \
+                           closure['start_time'] <= earliest_time <= closure['end_time']:
+                            is_closed = True
+                            break
+                    
+                    if not is_closed:
+                        # Check if runway is available at this time (respect separation)
+                        available_time = max(earliest_time, runway_usage[current_direction])
+                        
+                        # Check if runway can handle operation
+                        if runway.can_handle_operation(available_time):
+                            assigned_runway = runway
+                            assigned_time = available_time
+                            break
+            
+            if assigned_runway and assigned_time:
+                schedule.runway = assigned_runway
+                schedule.etd = assigned_time
+                # Update runway usage with 4-minute separation
+                runway_usage[assigned_runway.get_current_direction()] = assigned_time + 4
+                debug(f"{schedule.flight.flight_id} 이륙: {int_to_hhmm_colon(assigned_time)} 활주로 {assigned_runway.get_current_direction()}")
+        
+
         
         # Return result for consistency with other algorithms
         result = {}
@@ -324,7 +226,7 @@ class Scheduler:
                         # RL 환경과 에이전트 생성
                         rl_agent = PPOAgent(
                             observation_size=self.rl_env.observation_space_size,
-                            action_size=self.rl_env.action_space_size
+                            action_space=self.rl_env.action_space
                         )
                         
                         # 훈련된 모델 로드
@@ -340,7 +242,11 @@ class Scheduler:
             
             rl_agent = self.sim.rl_agent
             # Get current state observation
-            state = self.rl_env._get_observation()
+            if schedules:
+                state = self.rl_env._get_observation_for_schedule(schedules[0])
+            else:
+                # 스케줄이 없으면 기본 상태 생성
+                state = np.zeros(self.rl_env.observation_space_size)
             
             # Get available schedules for RL
             available_schedules = [s for s in schedules if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
@@ -350,7 +256,7 @@ class Scheduler:
                 debug("RL: 배정 가능한 스케줄이 없습니다")
                 return {}
             
-            # Select actions using RL agent
+            # Select actions using RL agent (action mask 없이)
             actions, action_probs, value = rl_agent.select_action(state, num_schedules)
             
             # 액션과 확률, value 저장 (나중에 simulation에서 사용)
@@ -365,7 +271,7 @@ class Scheduler:
             # Apply actions to schedules
             for i, schedule in enumerate(available_schedules):
                 if i < len(actions):
-                    action = actions[i]
+                    action = actions[i]  # [time_choice, runway_choice]
                     reward = self.rl_env._apply_single_schedule_action(schedule, action)
                     total_reward += reward
                     
@@ -385,163 +291,7 @@ class Scheduler:
             debug("Greedy 알고리즘으로 fallback합니다")
             return self.greedy(schedules, current_time, event_queue, forecast, runway_availability)
     
-    def _apply_rl_scheduling_action(self, action, schedules, current_time, event_queue, runway_availability):
-        """RL 액션을 실제 스케줄링 결정으로 적용 - 환경과 동일한 로직"""
-        # 대기 중인 스케줄들
-        pending_schedules = [s for s in schedules if s.status == FlightStatus.DORMANT or s.status == FlightStatus.WAITING]
-        
-        if not pending_schedules:
-            return False
-        
-        # 액션 해석: [runway_choice, time_choice, operation_type]
-        runway_choice = (action // 6) % 3  # 0: 14L, 1: 14R, 2: wait
-        time_choice = action % 6  # 0: -2, 1: -1, 2: 0, 3: +1, 4: +2, 5: go_around
-        operation_type = (action // 18) % 2  # 0: takeoff, 1: landing
-        
-        # Use the first pending schedule (the environment will handle multiple schedules)
-        schedule = pending_schedules[0]
-        
-        # Check if operation type matches schedule type
-        if (operation_type == 0 and not schedule.is_takeoff) or (operation_type == 1 and schedule.is_takeoff):
-            return False  # Operation type mismatch
-        
-        # 활주로 가용성 확인
-        runway_usage = {}
-        if runway_availability:
-            runway_usage["14L"] = runway_availability.get("14L", current_time)
-            runway_usage["14R"] = runway_availability.get("14R", current_time)
-        else:
-            runway_usage["14L"] = current_time
-            runway_usage["14R"] = current_time
-        
-        if runway_choice == 0:  # 14L
-            if schedule.is_takeoff:
-                # 이륙: 14L 활주로 사용
-                if self._is_runway_available_for_rl("14L", schedule, time_choice, runway_usage):
-                    success = self._assign_takeoff_rl(schedule, "14L", time_choice, current_time)
-                    return success
-            else:
-                # 착륙: 14L 활주로는 14R이 closed일 때만 사용 가능
-                if self._is_14r_closed_rl(event_queue):
-                    if self._is_runway_available_for_rl("14L", schedule, time_choice, runway_usage):
-                        success = self._assign_landing_rl(schedule, "14L", time_choice, current_time)
-                        return success
-                        
-        elif runway_choice == 1:  # 14R
-            if not schedule.is_takeoff:
-                # 착륙: 14R 활주로 사용
-                if self._is_runway_available_for_rl("14R", schedule, time_choice, runway_usage):
-                    success = self._assign_landing_rl(schedule, "14R", time_choice, current_time)
-                    return success
-            else:
-                # 이륙: 14R 활주로는 14L이 closed일 때만 사용 가능
-                if self._is_14l_closed_rl(event_queue):
-                    if self._is_runway_available_for_rl("14R", schedule, time_choice, runway_usage):
-                        success = self._assign_takeoff_rl(schedule, "14R", time_choice, current_time)
-                        return success
-        
-        # runway_choice == 2: 대기 (아무것도 하지 않음)
-        return False
-    
-    def _is_runway_available_for_rl(self, runway_name: str, schedule: Schedule, time_choice: int, runway_usage: dict) -> bool:
-        """활주로 사용 가능 여부 확인 (RL용)"""
-        # 시간 계산
-        if schedule.is_takeoff:
-            base_time = max(schedule.flight.etd, runway_usage.get(runway_name, 0))
-        else:
-            base_time = schedule.eta or runway_usage.get(runway_name, 0)
-        
-        # 시간 선택에 따른 실제 시간
-        if time_choice == 0:  # -2
-            actual_time = base_time - 2
-        elif time_choice == 1:  # -1
-            actual_time = base_time - 1
-        elif time_choice == 2:  # 0
-            actual_time = base_time
-        elif time_choice == 3:  # +1
-            actual_time = base_time + 1
-        elif time_choice == 4:  # +2
-            actual_time = base_time + 2
-        else:  # go_around
-            return True  # go_around는 항상 가능
-        
-        # 활주로 가용성 확인
-        return actual_time >= runway_usage.get(runway_name, 0)
-    
-    def _assign_takeoff_rl(self, schedule: Schedule, runway_name: str, time_choice: int, current_time: int) -> bool:
-        """이륙 배정 (RL용)"""
-        if time_choice == 5:  # go_around
-            return False
-        
-        # 시간 계산
-        base_time = max(schedule.flight.etd, current_time)
-        if time_choice == 0:  # -2
-            actual_time = base_time - 2
-        elif time_choice == 1:  # -1
-            actual_time = base_time - 1
-        elif time_choice == 2:  # 0
-            actual_time = base_time
-        elif time_choice == 3:  # +1
-            actual_time = base_time + 1
-        elif time_choice == 4:  # +2
-            actual_time = base_time + 2
-        
-        # 활주로 배정
-        for runway in self.sim.airport.runways:
-            if runway.name == runway_name:
-                schedule.runway = runway
-                schedule.etd = actual_time
-                debug(f"RL 이륙 배정: {schedule.flight.flight_id} -> {runway_name} {int_to_hhmm_colon(actual_time)}")
-                return True
-        
-        return False
-    
-    def _assign_landing_rl(self, schedule: Schedule, runway_name: str, time_choice: int, current_time: int) -> bool:
-        """착륙 배정 (RL용)"""
-        if time_choice == 5:  # go_around
-            # go_around 처리
-            self.sim.event_handler._go_around(schedule.flight.flight_id)
-            debug(f"RL go_around: {schedule.flight.flight_id}")
-            return True
-        
-        # 시간 계산
-        base_time = schedule.eta or current_time
-        if time_choice == 0:  # -2
-            actual_time = base_time - 2
-        elif time_choice == 1:  # -1
-            actual_time = base_time - 1
-        elif time_choice == 2:  # 0
-            actual_time = base_time
-        elif time_choice == 3:  # +1
-            actual_time = base_time + 1
-        elif time_choice == 4:  # +2
-            actual_time = base_time + 2
-        
-        # 활주로 배정
-        for runway in self.sim.airport.runways:
-            if runway.name == runway_name:
-                schedule.runway = runway
-                schedule.eta = actual_time
-                debug(f"RL 착륙 배정: {schedule.flight.flight_id} -> {runway_name} {int_to_hhmm_colon(actual_time)}")
-                return True
-        
-        return False
-    
-    def _is_14l_closed_rl(self, event_queue) -> bool:
-        """14L 활주로 폐쇄 여부 확인 (RL용)"""
-        if event_queue:
-            for event in event_queue:
-                if event.event_type == "RUNWAY_CLOSURE" and event.target == "14L":
-                    return True
-        return False
-    
-    def _is_14r_closed_rl(self, event_queue) -> bool:
-        """14R 활주로 폐쇄 여부 확인 (RL용)"""
-        if event_queue:
-            for event in event_queue:
-                if event.event_type == "RUNWAY_CLOSURE" and event.target == "14R":
-                    return True
-        return False
+
 
     def advanced(self, schedules, current_time, event_queue=None, forecast=None, runway_availability=None):
         """Advanced scheduler using MILP optimization"""

@@ -17,6 +17,7 @@ class Schedule:
         self.start_taxi_time = None
         self.etd = flight.etd  # 초기값을 flight.etd로 설정
         self.eta = flight.eta  # 초기값을 flight.eta로 설정
+        self.original_eta = flight.eta  # RL 전용 원본 ETA (가우시안 노이즈 적용된 초기값)
         self.atd = None
         self.is_takeoff = is_takeoff
         self.landing_time = None

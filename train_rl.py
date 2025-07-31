@@ -37,11 +37,30 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
     """실제 시뮬레이션을 사용한 RL 훈련"""
     print("=== 실제 시뮬레이션 기반 RL 훈련 시작 ===")
 
-    # RL 에이전트 초기화
-    # 상태 크기 계산: 1(시간) + 2(활주로) + 24*2(날씨) + 50*5(스케줄) + 10*3(이벤트) = 1 + 2 + 48 + 250 + 30 = 331
-    observation_size = 331
-    action_size = 288  # 2개 활주로 × 144개 시간 선택
-    rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
+    # RL 에이전트 초기화 - AirportEnvironment에서 정확한 크기 계산
+    from rl.environment import AirportEnvironment
+    
+    # 임시 시뮬레이션으로 환경 크기 계산
+    temp_airport = create_rkss_airport()
+    temp_scenario = generate_random_scenario(num_flights=25, num_events=5)
+    temp_schedules, temp_landing_flights, temp_events = load_scenario_from_dict(temp_scenario)
+    temp_sim = Simulation(
+        airport=temp_airport,
+        schedules=temp_schedules,
+        landing_flights=temp_landing_flights,
+        events=temp_events,
+        mode="TRAINING"
+    )
+    
+    rl_env = AirportEnvironment(temp_sim)
+    observation_size = rl_env.observation_space_size
+    action_space = rl_env.action_space
+    
+    print(f"RL 환경 크기: observation_size={observation_size}, action_space={action_space}")
+    print(f"  - 시간 선택: 0~180 (181개)")
+    print(f"  - 활주로 선택: 0~1 (2개)")
+    print(f"  - 총 액션 수: {action_space[0] * action_space[1]}개")
+    rl_agent = PPOAgent(observation_size=observation_size, action_space=action_space)
     
     # 최고 성능 추적
     best_reward = float('-inf')
@@ -60,7 +79,7 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
         
         # 새로운 시나리오 생성
         airport = create_rkss_airport()
-        scenario_dict = generate_random_scenario(num_flights=25, num_events=5)
+        scenario_dict = generate_random_scenario(num_flights=50, num_events=10)
         schedules, landing_flights, events = load_scenario_from_dict(scenario_dict)
         
         # 시뮬레이션 생성
@@ -79,7 +98,7 @@ def train_rl_with_real_simulation(episodes: int = 50, model_path: str = None):
         
         # 시뮬레이션 시작
         start_time = time.time()
-        sim.start()
+        sim.start(end_time=1440)  # 24시간(1440분) 후 종료
         
         # 시뮬레이션 완료까지 대기
         while sim.running:

@@ -111,8 +111,9 @@ class EventHandler:
     def _go_around(self, flight_id):
         debug(f"GO_AROUND: {flight_id} 착륙 재시도(15분 지연)")
         for s in self.sim.schedules:
-            if s.flight.flight_id == flight_id and s.status == FlightStatus.LANDING:
-                s.landing_time += 15
+            if s.flight.flight_id == flight_id and s.status == FlightStatus.WAITING:
+                if s.eta is not None:
+                    s.eta += 15
                 # Go-around 손실 추가
                 self.sim._add_go_around_loss(s)
 
@@ -135,7 +136,7 @@ class EventHandler:
         # 착륙 활주로 찾기 (32L 또는 32R)
         landing_runway = None
         for runway in self.sim.airport.runways:
-            if runway.name in ["32L", "32R"]:
+            if runway.name in ["14L", "14R"]: # 방금 수정함
                 landing_runway = runway.name
                 break
         if landing_runway:
@@ -160,6 +161,13 @@ class EventHandler:
         if flight:
             landing_schedule = Schedule(flight, is_takeoff=False)
             landing_schedule.status = FlightStatus.WAITING
+            
+            # 가우시안 노이즈가 적용된 실제 착륙 예정 시간 계산
+            # duration은 통보 시간이므로, 실제 착륙 시간 = current_time + duration
+            actual_landing_time = current_time + duration
+            landing_schedule.eta = actual_landing_time  # 실제 착륙 예정 시간
+            landing_schedule.original_eta = actual_landing_time  # RL 전용 원본 ETA
+            
             for runway in self.sim.airport.runways:
                 if runway.name == "14R":
                     landing_schedule.runway = runway

@@ -88,7 +88,7 @@ class WebSocketServer:
 
         if algorithm == "rl":
             import os
-            model_path = "models/ppo_best_second.pth"
+            model_path = "models/ppo_best.pth"
             if os.path.exists(model_path):
                 try:
                     from rl.agent import PPOAgent
@@ -97,14 +97,15 @@ class WebSocketServer:
                     # Create environment to get correct sizes
                     rl_env = AirportEnvironment(self.simulation)
                     observation_size = rl_env.observation_space_size
-                    action_size = rl_env.action_space_size
+                    action_space = rl_env.action_space
                     
                     # RL 에이전트 초기화 및 모델 로드
-                    rl_agent = PPOAgent(observation_size=observation_size, action_size=action_size)
+                    rl_agent = PPOAgent(observation_size=observation_size, action_space=action_space)
                     rl_agent.load_model(model_path)
                     self.simulation.set_rl_agent(rl_agent)
                     debug(f"훈련된 RL 모델을 로드했습니다: {model_path}")
-                    debug(f"Observation size: {observation_size}, Action size: {action_size}")
+                    debug(f"Observation size: {observation_size}, Action space: {action_space}")
+                    debug(f"총 액션 수: {action_space[0] * action_space[1]}개")
                 except Exception as e:
                     debug(f"RL 모델 로드 중 오류 발생: {e}")
                     # Send error response to frontend

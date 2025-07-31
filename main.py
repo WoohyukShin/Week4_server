@@ -45,9 +45,9 @@ def main():
     # 시작/종료 시간 계산
     min_etd = min([s.flight.etd for s in schedules]) if schedules else 0
     start_time = max(360, min_etd - 20)  # 최소 0600, 또는 첫 비행 ETD - 20분
-    end_time = None  # 시뮬레이션에서 자동 결정
+    end_time = 1440  # 24:00 (1440분)으로 고정
 
-    use_ws = True  # WebSocket
+    use_ws = False  # WebSocket (디버깅용으로 비활성화)
     is_training = False  # 강화학습 반복용 (랜덤 시나리오 사용 시 True 권장)
 
     if is_training:
@@ -81,7 +81,7 @@ def main():
         except KeyboardInterrupt:
             debug("Shutting down...")
     else:
-        sim.start(start_time=start_time)
+        sim.start(start_time=start_time, end_time=end_time)
 
 if __name__ == "__main__":
     main()

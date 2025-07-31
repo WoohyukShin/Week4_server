@@ -34,7 +34,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("rl", self)  # Use greedy algorithm by default
+        self.scheduler = Scheduler("greedy", self)  # Use greedy algorithm by default
 
         self.rl_agent = None  # RL 에이전트
         self.training_mode = False  # 학습 모드

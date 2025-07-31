@@ -112,8 +112,13 @@ class Scheduler:
                 runway_usage[runway.name] = max(runway_usage[runway.name], current_time)
                 runway_usage[runway.inverted_name] = max(runway_usage[runway.inverted_name], current_time)
 
-        # Process landing schedules
+        # Process landing schedules (15분 이내 착륙만 처리)
         for schedule in landing_schedules:
+            # 15분 이내 착륙만 처리 (무한 루프 방지)
+            if schedule.eta and schedule.eta > current_time + 15:
+                debug(f"{schedule.flight.flight_id} 착륙 스킵: ETA {int_to_hhmm_colon(schedule.eta)} (현재시간 + 15분 초과)")
+                continue
+            
             # Find earliest available time for landing
             earliest_time = max(current_time, schedule.eta or current_time)
             

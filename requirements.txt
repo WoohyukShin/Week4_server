@@ -1,6 +1,6 @@
 websockets==10.4
 pulp==2.7.0
-numpy==1.25.0
+numpy==1.24.3
 torch==2.0.1
-fastapi
-uvicorn
+fastapi==0.104.1
+uvicorn[websockets]==0.24.0

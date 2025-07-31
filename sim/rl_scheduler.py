@@ -49,9 +49,6 @@ class RLScheduler:
     
     def do_action(self) -> bool:
         """실제 시뮬레이션에서 호출되는 스케줄링 액션"""
-        # 현재 상태 관찰
-        current_state = self.env._get_observation()
-        
         # 사용 가능한 스케줄 확인
         available_schedules = [s for s in self.sim.schedules 
                               if s.status in [FlightStatus.DORMANT, FlightStatus.WAITING]]
@@ -60,32 +57,42 @@ class RLScheduler:
             debug("RL Scheduler: 배정 가능한 스케줄이 없습니다.")
             return False
         
-        # RL 에이전트가 액션 선택
-        actions, action_probs, value = self.agent.select_action(
-            current_state, 
-            num_schedules=len(available_schedules)
-        )
+        # do_action() 시작 시 assigned 정보 초기화
+        self._reset_assigned_info()
         
-        # 액션 적용 (스케줄 배정)
+        # 각 스케줄별로 개별 observation 생성
+        schedule_observations = []
+        for schedule in available_schedules:
+            observation = self.env._get_observation_for_schedule(schedule)
+            schedule_observations.append(observation)
+        
+        # RL 에이전트가 액션 선택
+        actions, action_probs, value = self.agent.select_action(schedule_observations)
+        
+        # 개별 액션별로 즉시 보상 계산 및 적용
         total_reward = 0.0
         assigned_count = 0
         
-        for i, action in enumerate(actions):
-            if i < len(available_schedules):
-                schedule = available_schedules[i]
-                reward = self._apply_single_schedule_action(schedule, action)
-                total_reward += reward
-                
-                if reward >= 0:
-                    assigned_count += 1
-                    debug(f"RL Scheduler: {schedule.flight.flight_id} 배정 성공 (reward: {reward})")
-                else:
-                    debug(f"RL Scheduler: {schedule.flight.flight_id} 배정 실패 (reward: {reward})")
+        for i, (schedule, action) in enumerate(zip(available_schedules, actions)):
+            # 액션 적용
+            reward = self._apply_single_schedule_action(schedule, action)
+            
+            # 개별 즉시 보상 계산 (이미 배정된 비행들과의 충돌 체크)
+            immediate_reward = self._calculate_immediate_reward(schedule)
+            total_action_reward = reward + immediate_reward
+            
+            total_reward += total_action_reward
+            
+            if reward >= 0:
+                assigned_count += 1
+                debug(f"RL Scheduler: {schedule.flight.flight_id} 배정 성공 (reward: {reward}, immediate: {immediate_reward})")
+            else:
+                debug(f"RL Scheduler: {schedule.flight.flight_id} 배정 실패 (reward: {reward})")
         
         # 경험 저장 (훈련 모드일 때만)
         if self.training_mode:
             self.current_episode_experiences.append({
-                'state': current_state,
+                'state': schedule_observations,
                 'actions': actions,
                 'action_probs': action_probs,
                 'reward': total_reward,
@@ -162,6 +169,9 @@ class RLScheduler:
         # 배정 성공
         success = self._assign_schedule(schedule, runway_name, selected_time)
         if success:
+            # assigned 정보 설정 (즉시 보상 계산용)
+            schedule.assigned_time = selected_time
+            schedule.assigned_runway_id = runway_name
             return 0.0  # 성공해도 즉시 보상 없음
         else:
             return -5.0   # 배정 실패
@@ -271,3 +281,48 @@ class RLScheduler:
         """훈련 모드 설정"""
         self.training_mode = training
         debug(f"RL 훈련 모드: {training}")
+    
+    def _reset_assigned_info(self):
+        """do_action() 시작 시 assigned 정보 초기화"""
+        for schedule in self.sim.schedules:
+            if schedule.status in [FlightStatus.DORMANT, FlightStatus.WAITING]:
+                # 이번 do_action()에서 배정할 비행들은 초기화
+                schedule.assigned_time = None
+                schedule.assigned_runway_id = None
+            else:
+                # 이미 배정된 비행들은 현재 배정 정보 유지
+                if schedule.etd is not None:
+                    schedule.assigned_time = schedule.etd
+                elif schedule.eta is not None:
+                    schedule.assigned_time = schedule.eta
+                
+                if schedule.runway is not None:
+                    schedule.assigned_runway_id = schedule.runway.name
+    
+    def _calculate_immediate_reward(self, schedule: Schedule) -> float:
+        """개별 스케줄 배정에 대한 즉시 보상 계산"""
+        if not hasattr(schedule, 'assigned_time') or schedule.assigned_time is None:
+            return 0.0
+        
+        immediate_reward = 0.0
+        
+        # 1. RUNWAY OCCUPY LOSS
+        for other_schedule in self.sim.schedules:
+            if other_schedule == schedule:
+                continue
+            
+            if (hasattr(other_schedule, 'assigned_time') and 
+                other_schedule.assigned_time is not None and
+                other_schedule.assigned_runway_id == schedule.assigned_runway_id):
+                
+                time_diff = abs(schedule.assigned_time - other_schedule.assigned_time)
+                if time_diff == 0:
+                    immediate_reward -= 10000 # 같은 활주로에서 동시 이착륙 => 최악의 경우
+                elif time_diff < 4:
+                    immediate_reward -= 300 
+        # 2. SIMULTANEOUS OPS
+        runway = next((r for r in self.sim.airport.runways if r.name == schedule.assigned_runway_id), None)
+        if runway and schedule.assigned_time < runway.next_available_time:
+            immediate_reward -= 500 # 활주로 점유 패널티
+        
+        return immediate_reward

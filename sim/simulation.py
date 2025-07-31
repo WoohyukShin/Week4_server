@@ -34,7 +34,7 @@ class Simulation:
         self.event_queue = list(self.events)
         self.mode = mode
         self.event_handler = EventHandler(self)
-        self.scheduler = Scheduler("greedy", self)  # Use greedy algorithm by default
+        self.scheduler = Scheduler("rl", self)  # Use greedy algorithm by default
 
         self.rl_agent = None  # RL 에이전트
         self.training_mode = False  # 학습 모드
@@ -1083,12 +1083,24 @@ class Simulation:
                 }
                 status_value = status_mapping.get(schedule.status.value, 0.0)
                 
+                # assigned 정보 (실시간 업데이트됨)
+                assigned_time = 0.0
+                if hasattr(schedule, 'assigned_time') and schedule.assigned_time is not None:
+                    assigned_time = schedule.assigned_time / 1440.0  # 정규화
+                
+                assigned_runway = 0.0
+                if hasattr(schedule, 'assigned_runway_id') and schedule.assigned_runway_id is not None:
+                    if schedule.assigned_runway_id == "14L":
+                        assigned_runway = 0.5
+                    elif schedule.assigned_runway_id == "14R":
+                        assigned_runway = 1.0
+                
                 state_features.extend([
-                    1.0 if schedule.is_takeoff else 0.0,  # 이륙/착륙 구분
-                    (flight.priority or 0) / 64.0,  # 우선순위 (정규화) - PRI_MAX = 64
-                    flight.etd / 1440.0 if flight.etd else 0.0,  # ETD (정규화)
-                    flight.eta / 1440.0 if flight.eta else 0.0,  # ETA (정규화)
-                    status_value / 10.0  # 상태 (정규화)
+                    flight.etd / 1440.0 if flight.etd else 0.0,  # ETD (정규화) - 0
+                    (flight.priority or 0) / 64.0,  # 우선순위 (정규화) - 1
+                    1.0 if schedule.is_takeoff else 0.0,  # 이륙/착륙 구분 - 2
+                    assigned_time,  # 배정된 시간 (정규화) - 3
+                    assigned_runway  # 배정된 활주로 (0: none, 0.5: 14L, 1.0: 14R) - 4
                 ])
             else:
                 # 패딩 (스케줄이 없는 경우) - 항상 같은 위치에 0으로 채움

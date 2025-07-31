@@ -23,7 +23,11 @@ class Schedule:
         self.landing_time = None
         self.taxi_to_gate_time = None
         self.runway = None  # 계획된 활주로
-        self.deadline = deadline  # 필요시만 사용 
+        self.deadline = deadline  # 필요시만 사용
+        
+        # RL용 배정 정보 (do_action()에서 수동으로 설정)
+        self.assigned_time = None  # 배정된 시간
+        self.assigned_runway_id = None  # 배정된 활주로 ID 
         
         # Priority 할당 로직 (Flight에서 가져오거나 직접 설정)
         if priority is not None:

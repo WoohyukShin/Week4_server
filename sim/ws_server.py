@@ -4,6 +4,8 @@ import json
 import os
 from utils.logger import debug
 import functools
+from fastapi import FastAPI, WebSocket
+from fastapi.responses import PlainTextResponse
 
 class WebSocketServer:
     def __init__(self, simulation, host="0.0.0.0", port=None):
@@ -15,6 +17,22 @@ class WebSocketServer:
         self.loop = None
         self.simulation_started = False
         debug(f"WebSocket server initialized on port {self.port}")
+        
+        # Create FastAPI app for HTTP + WebSocket
+        self.app = FastAPI()
+        
+        @self.app.get("/")
+        async def healthcheck():
+            return PlainTextResponse("OK")
+        
+        @self.app.get("/health")
+        async def health():
+            return PlainTextResponse("OK")
+        
+        @self.app.websocket("/ws")
+        async def websocket_endpoint(websocket: WebSocket):
+            await websocket.accept()
+            await self.handler(websocket, "/ws")
 
     async def handler(self, websocket, path):
         debug("클라이언트 연결됨")
@@ -177,17 +195,14 @@ class WebSocketServer:
             asyncio.run_coroutine_threadsafe(self.send_state_update(state), self.loop)
 
     def start(self):
-        debug(f"WebSocket 서버 시작: ws://{self.host}:{self.port}")
+        debug(f"FastAPI 서버 시작: http://{self.host}:{self.port}")
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
         async def run_server():
-            server = await websockets.serve(
-                self.handler,
-                self.host,
-                self.port
-            )
-            debug("WebSocket server started")
-            await asyncio.Future()  # run forever
+            import uvicorn
+            config = uvicorn.Config(self.app, host=self.host, port=self.port, log_level="info")
+            server = uvicorn.Server(config)
+            await server.serve()
 
         self.loop.run_until_complete(run_server())

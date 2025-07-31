@@ -59,28 +59,43 @@ class AirportEnvironment:
         """Get information about the specific flight to be scheduled"""
         flight_info = np.zeros(6)
         
-        # 0: flight_id (normalized)
-        flight_info[0] = float(hash(schedule.flight.flight_id) % 1000) / 1000.0
-        
-        # 1: original ETD/ETA (normalized to 0-1)
+        # 0: original ETD/ETA (normalized to 0-1)
         if schedule.is_takeoff:
             original_time = schedule.flight.etd
         else:
             original_time = schedule.eta
         
         if original_time is not None:
-            # 시간을 0-1 범위로 정규화 (0600-2200 = 360-1320)
-            flight_info[1] = (original_time - 360) / (1320 - 360)
+            # 시간을 0-1 범위로 정규화 (1440분 기준)
+            flight_info[0] = original_time / 1440.0
         else:
-            flight_info[1] = 0.5  # 기본값
+            flight_info[0] = 0.5  # 기본값
         
-        # 2: priority (normalized)
-        flight_info[2] = schedule.priority / 64.0  # 최대 priority로 정규화
+        # 1: priority (normalized)
+        flight_info[1] = schedule.priority / 64.0  # 최대 priority로 정규화
         
-        # 3: is_takeoff (0 or 1)
-        flight_info[3] = 1.0 if schedule.is_takeoff else 0.0
+        # 2: is_takeoff (0 or 1)
+        flight_info[2] = 1.0 if schedule.is_takeoff else 0.0
         
-        # 4: status (normalized)
+        # 3: assigned_time (normalized to 0-1, 0 if not assigned)
+        if hasattr(schedule, 'assigned_time') and schedule.assigned_time is not None:
+            # 배정된 시간을 0-1 범위로 정규화 (1440분 기준)
+            flight_info[3] = schedule.assigned_time / 1440.0
+        else:
+            flight_info[3] = 0.0  # 미배정
+        
+        # 4: assigned_runway_id (0: none, 0.5: 14L, 1.0: 14R)
+        if hasattr(schedule, 'assigned_runway_id') and schedule.assigned_runway_id is not None:
+            if schedule.assigned_runway_id == "14L":
+                flight_info[4] = 0.5
+            elif schedule.assigned_runway_id == "14R":
+                flight_info[4] = 1.0
+            else:
+                flight_info[4] = 0.0
+        else:
+            flight_info[4] = 0.0  # 미배정
+        
+        # 5: status (normalized)
         status_mapping = {
             FlightStatus.DORMANT: 0.0,
             FlightStatus.WAITING: 0.2,
@@ -91,15 +106,7 @@ class AirportEnvironment:
             FlightStatus.DELAYED: 0.9,
             FlightStatus.CANCELLED: 1.0
         }
-        flight_info[4] = status_mapping.get(schedule.status, 0.0)
-        
-        # 5: runway assignment (0: none, 1: 14L, 2: 14R)
-        if schedule.runway is None:
-            flight_info[5] = 0.0
-        elif schedule.runway.name == "14L":
-            flight_info[5] = 0.5
-        else:  # 14R
-            flight_info[5] = 1.0
+        flight_info[5] = status_mapping.get(schedule.status, 0.0)
         
         return flight_info
     

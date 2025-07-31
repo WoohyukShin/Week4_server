@@ -52,7 +52,7 @@ def main():
     end_time = 1440  # 24:00 (1440분)으로 고정
 
     use_ws = True  # WebSocket (디버깅용으로 비활성화)
-    is_training = False  # 강화학습 반복용 (랜덤 시나리오 사용 시 True 권장)
+    is_training = False  # 강화학습 반복용
 
     if is_training:
         print("PPO 훈련을 시작합니다...")

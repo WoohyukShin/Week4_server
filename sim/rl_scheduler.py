@@ -306,7 +306,25 @@ class RLScheduler:
         
         immediate_reward = 0.0
         
-        # 1. RUNWAY OCCUPY LOSS
+        # 1. DELAY LOSS (지연 시간에 대한 보상)
+        if schedule.is_takeoff:
+            original_time = schedule.flight.etd
+            if original_time is not None:
+                delay = schedule.assigned_time - original_time
+                if delay > 0:
+                    # 지연 시간에 대한 보상 (priority 고려)
+                    normalized_priority = schedule.priority / 32.0
+                    immediate_reward -= delay * normalized_priority * 100
+        else:
+            original_time = schedule.original_eta
+            if original_time is not None:
+                delay = schedule.assigned_time - original_time
+                if delay > 0:
+                    # 지연 시간에 대한 보상 (priority 고려)
+                    normalized_priority = schedule.priority / 32.0
+                    immediate_reward -= delay * normalized_priority * 100
+        
+        # 2. RUNWAY OCCUPY LOSS
         for other_schedule in self.sim.schedules:
             if other_schedule == schedule:
                 continue
@@ -317,12 +335,13 @@ class RLScheduler:
                 
                 time_diff = abs(schedule.assigned_time - other_schedule.assigned_time)
                 if time_diff == 0:
-                    immediate_reward -= 10000 # 같은 활주로에서 동시 이착륙 => 최악의 경우
+                    immediate_reward -= 30000 # 같은 활주로에서 동시 이착륙 => 최악의 경우
                 elif time_diff < 4:
-                    immediate_reward -= 300 
-        # 2. SIMULTANEOUS OPS
+                    immediate_reward -= 3000 # Runway Occupy Loss
+        
+        # 3. SIMULTANEOUS OPS
         runway = next((r for r in self.sim.airport.runways if r.name == schedule.assigned_runway_id), None)
         if runway and schedule.assigned_time < runway.next_available_time:
-            immediate_reward -= 500 # 활주로 점유 패널티
+            immediate_reward -= 5000 # CLOSED or occupied LOSS
         
         return immediate_reward

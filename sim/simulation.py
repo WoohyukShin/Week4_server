@@ -115,8 +115,9 @@ class Simulation:
                     to_remove.append(s)
             for s in to_remove:
                 self.schedules.remove(s)
-            # 종료 조건: schedules & event_queue 가 모두 비었으면 5분 후 종료
-            if not self.schedules and not self.event_queue:
+            # 종료 조건: schedules가 비었고, LANDING 예정 이벤트가 없으면 5분 후 종료
+            landing_events = [e for e in self.event_queue if e.event_type == "LANDING_ANNOUNCE"]
+            if not self.schedules and not landing_events:
                 if end_time_actual is None:
                     end_time_actual = self.time + end_buffer
                 elif self.time >= end_time_actual:
@@ -1151,11 +1152,9 @@ class Simulation:
                 actions = [[0, 0]] * 5  # [time_choice, runway_choice]
                 action_probs = [[0.5, 0.5]] * 5
             
-            # 개별 보상 + 전체 보상
+            # 개별 즉시 보상 + 전체 에피소드 보상 (전체적인 성과도 반영)
             immediate_reward = exp.get('immediate_reward', 0.0)
-            gamma = 1  # 감가율 (은 적용하지 않을 예정)
-            discounted_final_reward = final_reward
-            total_reward = immediate_reward + discounted_final_reward
+            total_reward = immediate_reward + final_reward
             
             # 실제 value 사용 (저장된 value가 있으면 사용, 없으면 0.0)
             value = exp.get('value', 0.0)
